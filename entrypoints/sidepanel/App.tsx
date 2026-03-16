@@ -49,6 +49,44 @@ const HIGH_RISK_ACTION_TYPES: ReadonlySet<BrowserAction["type"]> = new Set([
   "clickXY",
 ]);
 
+function resolveSelectedCopilotModel(
+  currentModel: string,
+  availableModels: ModelInfo[],
+): string {
+  const normalizedCurrentModel = currentModel.trim().toLowerCase();
+  if (!normalizedCurrentModel) {
+    return currentModel;
+  }
+
+  const copilotModels = availableModels.filter(
+    (model) => model.provider === "copilot",
+  );
+  if (copilotModels.length === 0) {
+    return currentModel;
+  }
+
+  const exactMatch = copilotModels.find(
+    (model) => model.id.toLowerCase() === normalizedCurrentModel,
+  );
+  if (exactMatch) {
+    return exactMatch.id;
+  }
+
+  const partialMatches = copilotModels.filter((model) => {
+    const normalizedId = model.id.toLowerCase();
+    return (
+      normalizedId.includes(normalizedCurrentModel) ||
+      normalizedCurrentModel.includes(normalizedId)
+    );
+  });
+
+  if (partialMatches.length === 1) {
+    return partialMatches[0].id;
+  }
+
+  return currentModel;
+}
+
 function isHighRiskAction(action: BrowserAction): boolean {
   return HIGH_RISK_ACTION_TYPES.has(action.type);
 }
@@ -346,6 +384,31 @@ export default function App() {
       if (response.ok) {
         const models = await response.json();
         setAvailableModels(models);
+        setSettings((currentSettings) => {
+          if (
+            currentSettings.provider !== "copilot" &&
+            currentSettings.provider !== "copilot-agent"
+          ) {
+            return currentSettings;
+          }
+
+          const resolvedModel = resolveSelectedCopilotModel(
+            currentSettings.copilot.model,
+            models,
+          );
+
+          if (resolvedModel === currentSettings.copilot.model) {
+            return currentSettings;
+          }
+
+          return {
+            ...currentSettings,
+            copilot: {
+              ...currentSettings.copilot,
+              model: resolvedModel,
+            },
+          };
+        });
       }
     } catch {
       console.error("Failed to fetch models");
@@ -1406,6 +1469,7 @@ export default function App() {
           settings={settings}
           onSettingsChange={setSettings}
           onClose={() => setShowSettings(false)}
+          isConnected={isConnected}
           availableModels={availableModels}
           onRefreshModels={() => {
             void fetchAvailableModels();

@@ -12,6 +12,7 @@ interface SettingsProps {
   settings: LLMSettings;
   onSettingsChange: (settings: LLMSettings) => void;
   onClose: () => void;
+  isConnected: boolean;
   availableModels: ModelInfo[];
   onRefreshModels: () => void;
   browserActionsEnabled: boolean;
@@ -86,6 +87,7 @@ export function Settings({
   settings,
   onSettingsChange,
   onClose,
+  isConnected,
   availableModels,
   onRefreshModels,
   browserActionsEnabled,
@@ -228,7 +230,7 @@ export function Settings({
               </option>
             ))}
           </select>
-          {copilotModels.length === 0 && (
+          {!isConnected && copilotModels.length === 0 && (
             <p className="text-xs text-gray-500 mt-1">
               {t("modelNotConnected", language)}
             </p>
