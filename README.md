@@ -58,9 +58,11 @@ Configure from the side panel settings button:
 
 - **Provider**: GitHub Copilot (Chat) / GitHub Copilot (Agent) / LM Studio
 - **Model Selection**: claude-sonnet, gpt-4o, etc.
+- **Browser Actions**: Allow or block automatic browser control from the side panel
+- **File Operations**: Allow or block generated file saves through the bridge
 - **Operation Mode**: Text / Screenshot / Hybrid
 - **Max Loop Count**: Maximum iterations for automation when using GitHub Copilot (Agent)
-- **High-Risk Actions / Evaluate**: Optional safety toggles for actions such as `newTab`, `closeTab`, and `evaluate`; Evaluate can only be enabled after high-risk actions are allowed
+- **High-Risk Actions / Evaluate**: Optional safety toggles for actions such as `newTab`, `closeTab`, and Playwright `browser_evaluate`; direct `evaluate` actions in the Chrome extension are blocked for security, and Playwright Evaluate is disabled by default
 - **Save Destination**: Save generated markdown either to the browser downloads folder or to a workspace-relative path via the VS Code bridge
 - **Default Save Path**: Configure a relative base path such as `output/blog`
 

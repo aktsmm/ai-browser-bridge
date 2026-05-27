@@ -41,6 +41,10 @@ import {
   normalizeDownloadRelativePath,
   shouldFallbackToDownloadsFromWorkspaceError,
 } from "./save-path";
+import {
+  defaultAllowEvaluateAction,
+  resolveAllowEvaluateAction,
+} from "./evaluate-setting-policy";
 
 const DEFAULT_SETTINGS: LLMSettings = {
   provider: "copilot-agent",
@@ -221,7 +225,9 @@ export default function App() {
   const [operationMode, setOperationMode] = useState<OperationMode>("hybrid");
   const [serverPort, setServerPort] = useState(DEFAULT_SERVER_PORT);
   const [allowHighRiskActions, setAllowHighRiskActions] = useState(true);
-  const [allowEvaluateAction, setAllowEvaluateAction] = useState(true);
+  const [allowEvaluateAction, setAllowEvaluateAction] = useState(
+    defaultAllowEvaluateAction(),
+  );
   const [saveDestinationMode, setSaveDestinationMode] =
     useState<SaveDestinationMode>("browser-downloads");
   const [saveRelativePath, setSaveRelativePath] = useState(
@@ -270,7 +276,7 @@ export default function App() {
         pendingAction?: PendingAction;
       }) => {
         let effectiveServerPort = DEFAULT_SERVER_PORT;
-        let effectiveAllowEvaluateAction = true;
+        let effectiveAllowEvaluateAction = defaultAllowEvaluateAction();
         const effectiveLanguage = isLanguage(result.language)
           ? result.language
           : language;
@@ -307,13 +313,11 @@ export default function App() {
         } else if (typeof result.allowHighRiskActions === "boolean") {
           setAllowHighRiskActions(result.allowHighRiskActions);
         }
-        if (shouldForceFullAutoMigration) {
-          effectiveAllowEvaluateAction = true;
-          setAllowEvaluateAction(true);
-        } else if (typeof result.allowEvaluateAction === "boolean") {
-          effectiveAllowEvaluateAction = result.allowEvaluateAction;
-          setAllowEvaluateAction(result.allowEvaluateAction);
-        }
+        effectiveAllowEvaluateAction = resolveAllowEvaluateAction({
+          storedValue: result.allowEvaluateAction,
+          shouldForceFullAutoMigration,
+        });
+        setAllowEvaluateAction(effectiveAllowEvaluateAction);
         if (
           result.saveDestinationMode === "browser-downloads" ||
           result.saveDestinationMode === "workspace-relative"
@@ -328,7 +332,7 @@ export default function App() {
           chrome.storage.local.set({
             browserActionsEnabled: true,
             allowHighRiskActions: true,
-            allowEvaluateAction: true,
+            allowEvaluateAction: defaultAllowEvaluateAction(),
             [FULL_AUTO_MIGRATION_VERSION_KEY]:
               FULL_AUTO_MIGRATION_TARGET_VERSION,
             [LEGACY_FULL_AUTO_MIGRATION_KEY]: true,
@@ -1751,6 +1755,7 @@ export default function App() {
             }}
             className="p-2 hover:bg-gray-100 rounded"
             title={t("reconnect", language)}
+            aria-label={t("reconnect", language)}
           >
             🔄
           </button>
@@ -1758,6 +1763,7 @@ export default function App() {
             onClick={() => setShowSettings(!showSettings)}
             className="p-2 hover:bg-gray-100 rounded"
             title={t("settings", language)}
+            aria-label={t("settings", language)}
           >
             ⚙️
           </button>

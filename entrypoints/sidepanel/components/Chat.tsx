@@ -110,6 +110,8 @@ export function Chat({
   );
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const copiedTimerRef = useRef<number | null>(null);
 
   const readFileAsText = async (file: File): Promise<string> => {
     return await new Promise((resolve, reject) => {
@@ -201,11 +203,26 @@ export function Chat({
     try {
       await navigator.clipboard.writeText(text);
       setCopiedIndex(index);
-      setTimeout(() => setCopiedIndex(null), 2000);
+      if (copiedTimerRef.current !== null) {
+        window.clearTimeout(copiedTimerRef.current);
+      }
+      copiedTimerRef.current = window.setTimeout(() => {
+        setCopiedIndex(null);
+        copiedTimerRef.current = null;
+      }, 2000);
     } catch (error) {
       console.error("Failed to copy message", error);
     }
   };
+
+  useEffect(() => {
+    return () => {
+      if (copiedTimerRef.current !== null) {
+        window.clearTimeout(copiedTimerRef.current);
+        copiedTimerRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -217,7 +234,13 @@ export function Chat({
       onSendMessage(input, pendingAttachments);
       setInput("");
       setPendingAttachments([]);
+      inputRef.current?.focus();
     }
+  };
+
+  const handleClear = () => {
+    onClearMessages();
+    inputRef.current?.focus();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -243,7 +266,7 @@ export function Chat({
       {messages.length > 0 && (
         <div className="flex justify-end px-4 pt-2">
           <button
-            onClick={onClearMessages}
+            onClick={handleClear}
             className="text-xs text-gray-500 hover:text-red-500 flex items-center gap-1"
             title={t("clear", language)}
           >
@@ -361,6 +384,7 @@ export function Chat({
                   onClick={() => handleCopy(message.content, index)}
                   className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity text-xs px-1.5 py-0.5 rounded bg-gray-100 hover:bg-gray-200 text-gray-600"
                   title={t("copy", language)}
+                  aria-label={t("copy", language)}
                 >
                   {copiedIndex === index ? "✓" : "📋"}
                 </button>
@@ -526,10 +550,12 @@ export function Chat({
             {t("attachFiles", language)}
           </button>
           <textarea
+            ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={t("inputPlaceholder", language)}
+            aria-label={t("inputPlaceholder", language)}
             rows={1}
             className="flex-1 p-2 border rounded resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
           />

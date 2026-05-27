@@ -40,7 +40,7 @@ export const translations = {
     highRiskActionBlockedAll:
       "⚠️ 提案された操作はすべて高リスクのため実行しませんでした。設定の「高リスク操作を許可」を有効にすると続行できます。",
     fullAutoMigrationNotice:
-      "ℹ️ UX改善のため初回のみフルオート設定へ移行しました（ブラウザ操作/高リスク操作/Evaluate）。必要なら設定で変更できます。",
+      "ℹ️ UX改善のため初回のみフルオート設定へ移行しました（ブラウザ操作/高リスク操作）。Evaluate は既定で無効のままです。必要なら設定で変更できます。",
     loopContinuationPrompt:
       "アクション実行結果 (Loop {loop}):\n{results}\n\n続けてください。エラーがあれば別の方法を試してください。完了したら「完了」と報告してください。",
     showInFolder: "フォルダで表示",
@@ -103,12 +103,12 @@ export const translations = {
     serverPortDesc: "VS Code拡張サーバーの接続先ポート (1-65535)",
     allowHighRiskActions: "高リスク操作を許可",
     allowHighRiskActionsDesc:
-      "newTab / closeTab / evaluate などの高リスク操作を実行可能にします。無効時は自動実行しません。",
-    allowEvaluateAction: "Evaluate操作を許可",
+      "newTab / closeTab / Playwright browser_evaluate などの高リスク操作を実行可能にします。無効時は自動実行しません。",
+    allowEvaluateAction: "Playwright Evaluate操作を許可",
     allowEvaluateActionDesc:
-      "高リスク操作。必要時のみ有効化し、意図しないスクリプト実行に注意してください。",
+      "高リスク操作。Playwright browser_evaluate を必要時のみ有効化し、意図しないスクリプト実行に注意してください。Chrome 拡張内の direct evaluate は常にブロックされます。",
     allowEvaluateActionDisabledHint:
-      "「高リスク操作を許可」が無効の間は Evaluate 操作を変更できません。",
+      "「高リスク操作を許可」が無効の間は Playwright Evaluate 操作を変更できません。",
     copilotAgentDesc: "GitHub Copilot Agent, @workspace, ツール使用可",
     modelSelectAria: "モデル選択",
   },
@@ -151,7 +151,7 @@ export const translations = {
     highRiskActionBlockedAll:
       '⚠️ All suggested actions were high-risk and were not executed. Enable "Allow High-Risk Actions" in settings to continue.',
     fullAutoMigrationNotice:
-      "ℹ️ To improve UX, settings were migrated to full-auto once (Browser Actions / High-Risk Actions / Evaluate). You can change them in Settings anytime.",
+      "ℹ️ To improve UX, settings were migrated to full-auto once (Browser Actions / High-Risk Actions). Evaluate remains disabled by default. You can change it in Settings anytime.",
     loopContinuationPrompt:
       'Action execution result (Loop {loop}):\n{results}\n\nPlease continue. If there are errors, try another approach. Report "completed" once finished.',
     showInFolder: "Show in folder",
@@ -216,12 +216,12 @@ export const translations = {
     serverPortDesc: "Target port of the VS Code bridge server (1-65535)",
     allowHighRiskActions: "Allow High-Risk Actions",
     allowHighRiskActionsDesc:
-      "Allows high-risk actions such as newTab / closeTab / evaluate. When disabled, these actions are not executed.",
-    allowEvaluateAction: "Allow Evaluate Action",
+      "Allows high-risk actions such as newTab / closeTab / Playwright browser_evaluate. When disabled, these actions are not executed.",
+    allowEvaluateAction: "Allow Playwright Evaluate Action",
     allowEvaluateActionDesc:
-      "High-risk operation. Enable only when needed and review generated scripts carefully.",
+      "High-risk operation. Enable Playwright browser_evaluate only when needed and review generated scripts carefully. Direct evaluate actions in the Chrome extension are always blocked.",
     allowEvaluateActionDisabledHint:
-      'You cannot change Evaluate while "Allow High-Risk Actions" is disabled.',
+      'You cannot change Playwright Evaluate while "Allow High-Risk Actions" is disabled.',
     copilotAgentDesc: "GitHub Copilot Agent, @workspace, tools enabled",
     modelSelectAria: "Model selection",
   },

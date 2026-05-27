@@ -2,6 +2,7 @@ import type { BrowserAction, FormField } from "./types";
 import { BRIDGE_CLIENT_HEADERS } from "./constants";
 import { normalizeServerPort } from "./server-port";
 import { normalizeDownloadRelativePath } from "./save-path";
+import { getEvaluateBlockedMessage } from "./evaluate-policy";
 
 // Playwright MCP availability flag (kept for future integration)
 let playwrightAvailable = false;
@@ -47,6 +48,15 @@ async function getBridgeBaseUrl(): Promise<string> {
       },
     );
   });
+}
+
+async function getCurrentTab(): Promise<BrowserTab> {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab || !tab.id) {
+    throw new Error("No active tab found");
+  }
+
+  return tab;
 }
 
 export function setPlaywrightAvailable(available: boolean) {
@@ -97,34 +107,202 @@ function isPlaywrightEvaluateActionAllowed(
   return allowInternalEvaluate && isInternalPlaywrightEvaluateCall(params);
 }
 
-const EVALUATE_MAX_LENGTH = 2000;
-const EVALUATE_BLOCKED_PATTERN =
-  /\b(fetch|xmlhttprequest|websocket|eventsource|sendbeacon|localstorage|sessionstorage|indexeddb|document\.cookie|chrome\.|browser\.|eval\(|function\s*\(|import\s|window\.location|location\.)/i;
+async function ensureClientLoggers(): Promise<void> {
+  try {
+    const tab = await getCurrentTab();
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id! },
+      func: () => {
+        const win = window as Window & {
+          __copilotConsolePatched?: boolean;
+          __copilotConsoleLogs?: Array<{
+            level: string;
+            message: string;
+            ts: number;
+          }>;
+          __copilotConsoleOriginals?: {
+            log: typeof console.log;
+            info: typeof console.info;
+            warn: typeof console.warn;
+            error: typeof console.error;
+          };
+          __copilotNetworkPatched?: boolean;
+          __copilotNetworkLogs?: Array<{
+            method: string;
+            url: string;
+            status: number | string;
+            duration: number;
+            ts: number;
+          }>;
+        };
+        const maxLogs = 200;
 
-function validateEvaluateScriptSource(source: string): {
-  ok: boolean;
-  reason?: string;
-} {
-  const trimmed = source.trim();
-  if (!trimmed) {
-    return { ok: false, reason: "Empty script is not allowed" };
+        if (!win.__copilotConsolePatched) {
+          win.__copilotConsolePatched = true;
+          win.__copilotConsoleLogs = win.__copilotConsoleLogs || [];
+          win.__copilotConsoleOriginals = {
+            log: console.log.bind(console),
+            info: console.info.bind(console),
+            warn: console.warn.bind(console),
+            error: console.error.bind(console),
+          };
+
+          const pushConsole = (level: string, args: unknown[]) => {
+            try {
+              const message = args
+                .map((value) =>
+                  typeof value === "string"
+                    ? value
+                    : JSON.stringify(value, null, 0),
+                )
+                .join(" ");
+              win.__copilotConsoleLogs!.push({
+                level,
+                message,
+                ts: Date.now(),
+              });
+              if (win.__copilotConsoleLogs!.length > maxLogs) {
+                win.__copilotConsoleLogs!.splice(
+                  0,
+                  win.__copilotConsoleLogs!.length - maxLogs,
+                );
+              }
+            } catch {
+              // Ignore serialization failures.
+            }
+          };
+
+          console.log = (...args: unknown[]) => {
+            pushConsole("log", args);
+            win.__copilotConsoleOriginals!.log(...args);
+          };
+          console.info = (...args: unknown[]) => {
+            pushConsole("info", args);
+            win.__copilotConsoleOriginals!.info(...args);
+          };
+          console.warn = (...args: unknown[]) => {
+            pushConsole("warn", args);
+            win.__copilotConsoleOriginals!.warn(...args);
+          };
+          console.error = (...args: unknown[]) => {
+            pushConsole("error", args);
+            win.__copilotConsoleOriginals!.error(...args);
+          };
+        }
+
+        if (!win.__copilotNetworkPatched) {
+          win.__copilotNetworkPatched = true;
+          win.__copilotNetworkLogs = win.__copilotNetworkLogs || [];
+
+          const pushNetwork = (
+            method: string,
+            url: string,
+            status: number | string,
+            duration: number,
+          ) => {
+            win.__copilotNetworkLogs!.push({
+              method,
+              url,
+              status,
+              duration,
+              ts: Date.now(),
+            });
+            if (win.__copilotNetworkLogs!.length > maxLogs) {
+              win.__copilotNetworkLogs!.splice(
+                0,
+                win.__copilotNetworkLogs!.length - maxLogs,
+              );
+            }
+          };
+
+          const originalFetch = window.fetch.bind(window);
+          window.fetch = async (...args: Parameters<typeof fetch>) => {
+            const startedAt = Date.now();
+            try {
+              const response = await originalFetch(...args);
+              const input = args[0];
+              const method = (
+                args[1]?.method ||
+                (input instanceof Request && input.method) ||
+                "GET"
+              ).toString();
+              const url =
+                typeof input === "string"
+                  ? input
+                  : input instanceof Request
+                    ? input.url
+                    : "unknown";
+              pushNetwork(method, url, response.status, Date.now() - startedAt);
+              return response;
+            } catch (error) {
+              const input = args[0];
+              const method = (
+                args[1]?.method ||
+                (input instanceof Request && input.method) ||
+                "GET"
+              ).toString();
+              const url =
+                typeof input === "string"
+                  ? input
+                  : input instanceof Request
+                    ? input.url
+                    : "unknown";
+              pushNetwork(method, url, "ERR", Date.now() - startedAt);
+              throw error;
+            }
+          };
+
+          const originalOpen = XMLHttpRequest.prototype.open;
+          const originalSend = XMLHttpRequest.prototype.send;
+          XMLHttpRequest.prototype.open = function (
+            this: XMLHttpRequest & {
+              __copilotMethod?: string;
+              __copilotUrl?: string;
+            },
+            method: string,
+            url: string | URL,
+            async?: boolean,
+            username?: string | null,
+            password?: string | null,
+          ) {
+            this.__copilotMethod = method ?? "GET";
+            this.__copilotUrl =
+              typeof url === "string" ? url : String(url ?? "unknown");
+            return originalOpen.call(
+              this,
+              method,
+              url,
+              async ?? true,
+              username,
+              password,
+            );
+          };
+          XMLHttpRequest.prototype.send = function (
+            this: XMLHttpRequest & {
+              __copilotMethod?: string;
+              __copilotUrl?: string;
+            },
+            body?: Document | BodyInit | null,
+          ) {
+            const startedAt = Date.now();
+            this.addEventListener("loadend", () => {
+              pushNetwork(
+                this.__copilotMethod || "GET",
+                this.__copilotUrl || "unknown",
+                this.status,
+                Date.now() - startedAt,
+              );
+            });
+            return originalSend.apply(this, [body] as Parameters<
+              typeof originalSend
+            >);
+          };
+        }
+      },
+    });
+  } catch {
+    // Ignore logger injection errors.
   }
-
-  if (trimmed.length > EVALUATE_MAX_LENGTH) {
-    return {
-      ok: false,
-      reason: `Script is too long (max ${EVALUATE_MAX_LENGTH} chars)`,
-    };
-  }
-
-  if (EVALUATE_BLOCKED_PATTERN.test(trimmed)) {
-    return {
-      ok: false,
-      reason: "Script contains blocked tokens for safety",
-    };
-  }
-
-  return { ok: true };
 }
 
 export async function executeBrowserAction(
@@ -224,215 +402,10 @@ export async function executeBrowserAction(
         }
         return await executeViaPlaywright(action.action, action.params);
       default:
-        return `Unknown action type`;
+        return "Unknown action type";
     }
   } catch (error) {
     return `Error: ${error instanceof Error ? error.message : String(error)}`;
-  }
-}
-
-async function getCurrentTab(): Promise<BrowserTab> {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab || !tab.id) throw new Error("No active tab found");
-  return tab;
-}
-
-async function ensureClientLoggers(): Promise<void> {
-  try {
-    const tab = await getCurrentTab();
-    await chrome.scripting.executeScript({
-      target: { tabId: tab.id! },
-      func: () => {
-        const w = window as unknown as {
-          __copilotConsolePatched?: boolean;
-          __copilotConsoleLogs?: {
-            level: string;
-            message: string;
-            ts: number;
-          }[];
-          __copilotConsoleOriginals?: Record<
-            string,
-            (...args: unknown[]) => void
-          >;
-          __copilotNetworkPatched?: boolean;
-          __copilotNetworkLogs?: {
-            method: string;
-            url: string;
-            status: number | string;
-            duration: number;
-            ts: number;
-          }[];
-          fetch?: typeof window.fetch;
-        };
-
-        const maxLogs = 200;
-
-        if (!w.__copilotConsolePatched) {
-          w.__copilotConsolePatched = true;
-          w.__copilotConsoleLogs = w.__copilotConsoleLogs || [];
-          w.__copilotConsoleOriginals = {
-            log: console.log.bind(console),
-            info: console.info.bind(console),
-            warn: console.warn.bind(console),
-            error: console.error.bind(console),
-          };
-
-          const push = (level: string, args: unknown[]) => {
-            try {
-              const message = args
-                .map((a) =>
-                  typeof a === "string" ? a : JSON.stringify(a, null, 0),
-                )
-                .join(" ");
-              w.__copilotConsoleLogs!.push({ level, message, ts: Date.now() });
-              if (w.__copilotConsoleLogs!.length > maxLogs) {
-                w.__copilotConsoleLogs!.splice(
-                  0,
-                  w.__copilotConsoleLogs!.length - maxLogs,
-                );
-              }
-            } catch {
-              // ignore
-            }
-          };
-
-          console.log = (...args: unknown[]) => {
-            push("log", args);
-            w.__copilotConsoleOriginals!.log(...args);
-          };
-          console.info = (...args: unknown[]) => {
-            push("info", args);
-            w.__copilotConsoleOriginals!.info(...args);
-          };
-          console.warn = (...args: unknown[]) => {
-            push("warn", args);
-            w.__copilotConsoleOriginals!.warn(...args);
-          };
-          console.error = (...args: unknown[]) => {
-            push("error", args);
-            w.__copilotConsoleOriginals!.error(...args);
-          };
-        }
-
-        if (!w.__copilotNetworkPatched) {
-          w.__copilotNetworkPatched = true;
-          w.__copilotNetworkLogs = w.__copilotNetworkLogs || [];
-
-          const pushNetwork = (
-            method: string,
-            url: string,
-            status: number | string,
-            duration: number,
-          ) => {
-            w.__copilotNetworkLogs!.push({
-              method,
-              url,
-              status,
-              duration,
-              ts: Date.now(),
-            });
-            if (w.__copilotNetworkLogs!.length > maxLogs) {
-              w.__copilotNetworkLogs!.splice(
-                0,
-                w.__copilotNetworkLogs!.length - maxLogs,
-              );
-            }
-          };
-
-          const originalFetch = window.fetch.bind(window);
-          window.fetch = async (...args: Parameters<typeof fetch>) => {
-            const start = Date.now();
-            try {
-              const res = await originalFetch(...args);
-              const input = args[0];
-              const method = (
-                args[1]?.method ||
-                (input instanceof Request && input.method) ||
-                "GET"
-              ).toString();
-              const url =
-                typeof input === "string"
-                  ? input
-                  : input instanceof Request
-                    ? input.url
-                    : "unknown";
-              pushNetwork(method, url, res.status, Date.now() - start);
-              return res;
-            } catch (error) {
-              const input = args[0];
-              const method = (
-                args[1]?.method ||
-                (input instanceof Request && input.method) ||
-                "GET"
-              ).toString();
-              const url =
-                typeof input === "string"
-                  ? input
-                  : input instanceof Request
-                    ? input.url
-                    : "unknown";
-              pushNetwork(method, url, "ERR", Date.now() - start);
-              throw error;
-            }
-          };
-
-          const originalOpen = XMLHttpRequest.prototype.open;
-          const originalSend = XMLHttpRequest.prototype.send;
-          XMLHttpRequest.prototype.open = function (
-            this: XMLHttpRequest,
-            method: string,
-            url: string | URL,
-            async?: boolean,
-            username?: string | null,
-            password?: string | null,
-          ) {
-            (
-              this as unknown as {
-                __copilotMethod?: string;
-                __copilotUrl?: string;
-              }
-            ).__copilotMethod =
-              typeof method === "string" ? method : String(method ?? "GET");
-            (
-              this as unknown as {
-                __copilotMethod?: string;
-                __copilotUrl?: string;
-              }
-            ).__copilotUrl =
-              typeof url === "string" ? url : String(url ?? "unknown");
-
-            return originalOpen.call(
-              this,
-              method,
-              url,
-              async ?? true,
-              username,
-              password,
-            );
-          };
-          XMLHttpRequest.prototype.send = function (
-            this: XMLHttpRequest,
-            body?: Document | BodyInit | null,
-          ) {
-            const start = Date.now();
-            this.addEventListener("loadend", () => {
-              const method =
-                (this as unknown as { __copilotMethod?: string })
-                  .__copilotMethod || "GET";
-              const url =
-                (this as unknown as { __copilotUrl?: string }).__copilotUrl ||
-                "unknown";
-              pushNetwork(method, url, this.status, Date.now() - start);
-            });
-            return originalSend.apply(this, [body] as unknown as Parameters<
-              typeof originalSend
-            >);
-          };
-        }
-      },
-    });
-  } catch {
-    // Ignore logger injection errors
   }
 }
 
@@ -1181,89 +1154,9 @@ async function evaluateScript(
   script: string,
   selector?: string,
 ): Promise<string> {
-  const safetyCheck = validateEvaluateScriptSource(script);
-  if (!safetyCheck.ok) {
-    return `Evaluate blocked: ${safetyCheck.reason}`;
-  }
-
-  const tab = await getCurrentTab();
-  const blockedPatternSource = EVALUATE_BLOCKED_PATTERN.source;
-  const blockedPatternFlags = EVALUATE_BLOCKED_PATTERN.flags;
-  const results = await chrome.scripting.executeScript({
-    target: { tabId: tab.id! },
-    func: async (
-      code: string,
-      sel: string | undefined,
-      blockedSource: string,
-      blockedFlags: string,
-    ) => {
-      try {
-        let element: HTMLElement | null = null;
-        if (sel) {
-          const refMatch = sel
-            .trim()
-            .match(/^(?:\[\s*)?(?:ref:\s*)?([eE]\d+)(?:\s*\])?(?:\b.*)?$/);
-          if (refMatch) {
-            element = document.querySelector(
-              `[data-copilot-ref="${refMatch[1].toLowerCase()}"]`,
-            );
-          } else {
-            element = document.querySelector(sel);
-          }
-        }
-
-        const source = code.trim();
-        const blockedPattern = new RegExp(blockedSource, blockedFlags);
-        if (blockedPattern.test(source)) {
-          return {
-            success: false,
-            error: "Eval blocked: Script contains blocked tokens for safety",
-          };
-        }
-
-        const executeSource = (value: string, target: HTMLElement | null) => {
-          const looksLikeArrow = /=>/.test(value);
-
-          if (looksLikeArrow) {
-            const fn = new Function("element", `return (${value})(element);`);
-            return fn(target);
-          }
-
-          const expressionFn = new Function("element", `return (${value});`);
-          return expressionFn(target);
-        };
-
-        const rawResult = executeSource(source, element);
-        const result =
-          rawResult &&
-          typeof (rawResult as Promise<unknown>).then === "function"
-            ? await (rawResult as Promise<unknown>)
-            : rawResult;
-
-        let serialized = "undefined";
-        if (result !== undefined) {
-          try {
-            serialized = JSON.stringify(result) ?? String(result);
-          } catch {
-            serialized = String(result);
-          }
-        }
-
-        return {
-          success: true,
-          message: `Evaluated: ${serialized}`,
-        };
-      } catch (error) {
-        return {
-          success: false,
-          error: `Eval error: ${error instanceof Error ? error.message : String(error)}`,
-        };
-      }
-    },
-    args: [script, selector, blockedPatternSource, blockedPatternFlags],
-  });
-  const result = results[0]?.result;
-  return resolveScriptResultMessage(result, "Evaluate failed");
+  void script;
+  void selector;
+  return getEvaluateBlockedMessage();
 }
 
 // Get console logs (like Playwright browser_console_messages)

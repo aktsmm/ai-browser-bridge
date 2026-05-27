@@ -58,9 +58,11 @@
 
 - **プロバイダー**: GitHub Copilot (Chat) / GitHub Copilot (Agent) / LM Studio
 - **モデル選択**: claude-sonnet, gpt-4o など
+- **ブラウザ操作**: サイドパネルからの自動ブラウザ操作を許可/無効化できます
+- **ファイル操作**: bridge 経由の生成ファイル保存を許可/無効化できます
 - **動作モード**: テキスト / スクリーンショット / ハイブリッド
 - **最大ループ数**: GitHub Copilot (Agent) 利用時の自動操作の最大繰り返し回数
-- **高リスク操作 / Evaluate操作の許可**: `newTab` / `closeTab` / `evaluate` などの安全トグル。Evaluate は高リスク操作を許可した場合のみ有効化できます
+- **高リスク操作 / Evaluate操作の許可**: `newTab` / `closeTab` / Playwright `browser_evaluate` などの安全トグル。Chrome 拡張内の direct `evaluate` はセキュリティ上ブロックされ、Playwright Evaluate は既定で無効です
 - **保存先モード**: 生成した Markdown をブラウザのダウンロードフォルダ、または VS Code workspace 相対パスへ保存できます
 - **既定の相対保存パス**: `output/blog` のような既定 path を設定できます
 
