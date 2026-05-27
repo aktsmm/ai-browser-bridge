@@ -110,16 +110,16 @@ This extension respects user privacy.
 
 ### Permission Usage
 
-| Permission       | Purpose                                                           |
-| ---------------- | ----------------------------------------------------------------- |
-| activeTab        | Get current page content                                          |
-| tabs             | Get tab info (URL, title)                                         |
-| scripting        | Analyze page DOM elements                                         |
-| storage          | Save user settings                                                |
-| sidePanel        | Display chat UI                                                   |
-| host_permissions | Read the active page on sites where the user opens the side panel |
+| Permission       | Purpose                                                         |
+| ---------------- | --------------------------------------------------------------- |
+| activeTab        | Get current page content                                        |
+| tabs             | Get tab info (URL, title)                                       |
+| scripting        | Analyze page DOM elements                                       |
+| storage          | Save user settings                                              |
+| sidePanel        | Display chat UI                                                 |
+| host_permissions | Limit the placeholder content script to local development pages |
 
-The extension requests site access broadly because it can analyze the currently opened page on arbitrary sites, but page content is sent only to the local VS Code bridge on `localhost` and then to the provider selected by the user.
+The extension no longer requests broad static site access. It reads the current page through `activeTab` when the user explicitly opens the side panel or triggers the extension, and page content is sent only to the local VS Code bridge on `localhost` and then to the provider selected by the user.
 
 ### LLM Data Transmission
 

@@ -42,9 +42,21 @@ async function main() {
     );
   }
 
+  if (wxtConfigSource.includes('host_permissions: ["<all_urls>"]')) {
+    failures.push(
+      "wxt.config.ts must not request broad <all_urls> host permissions",
+    );
+  }
+
   if (!contentScriptSource.includes("slice(0, 50000)")) {
     failures.push(
       "content.ts must cap extracted page content at 50,000 characters",
+    );
+  }
+
+  if (contentScriptSource.includes('matches: ["<all_urls>"]')) {
+    failures.push(
+      "content.ts must not register a static <all_urls> content script",
     );
   }
 

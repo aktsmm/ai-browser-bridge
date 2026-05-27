@@ -1,9 +1,16 @@
 // Content Script - ページ内容抽出用
-// サイドパネルから直接 chrome.scripting.executeScript で呼び出すため、
-// このファイルは将来の拡張用（自動抽出機能など）
+// 通常のページ操作はサイドパネルから chrome.scripting.executeScript で行う。
+// この常駐 content script は将来の拡張用 placeholder として local のみで有効化する。
+
+const LOCAL_PLACEHOLDER_MATCHES = [
+  "http://localhost/*",
+  "http://127.0.0.1/*",
+  "https://localhost/*",
+  "https://127.0.0.1/*",
+];
 
 export default defineContentScript({
-  matches: ["<all_urls>"],
+  matches: LOCAL_PLACEHOLDER_MATCHES,
   runAt: "document_idle",
 
   main() {

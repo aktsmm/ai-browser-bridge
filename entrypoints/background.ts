@@ -100,6 +100,30 @@ export default defineBackground({
         if (typedMessage.type === "download-file") {
           const { filename, content, mimeType } = typedMessage;
 
+          if (typeof content !== "string") {
+            sendResponse({
+              success: false,
+              error: "content must be a string",
+            });
+            return;
+          }
+
+          if (filename !== undefined && typeof filename !== "string") {
+            sendResponse({
+              success: false,
+              error: "filename must be a string",
+            });
+            return;
+          }
+
+          if (mimeType !== undefined && typeof mimeType !== "string") {
+            sendResponse({
+              success: false,
+              error: "mimeType must be a string",
+            });
+            return;
+          }
+
           const encodeUtf8ToBase64 = (value: string): string => {
             const bytes = new TextEncoder().encode(value);
             let binary = "";
@@ -112,7 +136,7 @@ export default defineBackground({
             return btoa(binary);
           };
 
-          const encodedContent = encodeUtf8ToBase64(content || "");
+          const encodedContent = encodeUtf8ToBase64(content);
           const dataUrl = `data:${mimeType || "text/plain;charset=utf-8"};base64,${encodedContent}`;
           void browser.downloads
             .download({

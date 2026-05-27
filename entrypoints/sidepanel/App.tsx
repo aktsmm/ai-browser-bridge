@@ -20,6 +20,11 @@ import type { Language } from "./i18n";
 import { t } from "./i18n";
 import { BRIDGE_CLIENT_HEADERS } from "./constants";
 import { DEFAULT_SERVER_PORT, normalizeServerPort } from "./server-port";
+import {
+  shouldEnableScreenshotFallback,
+  shouldStopAutonomousLoopAfterFailures,
+} from "./agent-loop-policy";
+import { readUtf8Stream } from "./stream-reader";
 
 const DEFAULT_SETTINGS: LLMSettings = {
   provider: "copilot-agent",
@@ -186,6 +191,12 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
   const [modelFetchFailed, setModelFetchFailed] = useState(false);
+  const [connectionErrorDetail, setConnectionErrorDetail] = useState<
+    string | null
+  >(null);
+  const [modelFetchErrorDetail, setModelFetchErrorDetail] = useState<
+    string | null
+  >(null);
   const [browserActionsEnabled, setBrowserActionsEnabled] = useState(true);
   const [fileOperationsEnabled, setFileOperationsEnabled] = useState(true);
   const [language, setLanguage] = useState<Language>("ja");
@@ -364,17 +375,26 @@ export default function App() {
       console.log("Connection status:", connected);
       setIsConnected(connected);
       if (connected) {
+        setConnectionErrorDetail(null);
         setModelFetchFailed(false);
         void fetchAvailableModels(overridePort);
       } else {
         setAvailableModels([]);
         setModelFetchFailed(false);
+        setModelFetchErrorDetail(null);
+        setConnectionErrorDetail(
+          `Health check failed (${response.status} ${response.statusText})`,
+        );
       }
     } catch (error) {
       console.log("Connection failed:", error);
       setIsConnected(false);
       setAvailableModels([]);
       setModelFetchFailed(false);
+      setModelFetchErrorDetail(null);
+      setConnectionErrorDetail(
+        error instanceof Error ? error.message : String(error),
+      );
     } finally {
       clearTimeout(timeout);
     }
@@ -392,6 +412,7 @@ export default function App() {
         const models = await response.json();
         setAvailableModels(models);
         setModelFetchFailed(false);
+        setModelFetchErrorDetail(null);
         setSettings((currentSettings) => {
           if (
             currentSettings.provider !== "copilot" &&
@@ -420,15 +441,21 @@ export default function App() {
       } else {
         setAvailableModels([]);
         setModelFetchFailed(true);
+        setModelFetchErrorDetail(
+          `Model list request failed (${response.status} ${response.statusText})`,
+        );
         console.error(
           "Failed to fetch models",
           response.status,
           response.statusText,
         );
       }
-    } catch {
+    } catch (error) {
       setAvailableModels([]);
       setModelFetchFailed(true);
+      setModelFetchErrorDetail(
+        error instanceof Error ? error.message : String(error),
+      );
       console.error("Failed to fetch models");
     } finally {
       clearTimeout(timeout);
@@ -914,8 +941,6 @@ export default function App() {
       if (!reader) {
         throw new Error("Empty response stream from server");
       }
-      const decoder = new TextDecoder();
-      let assistantMessage = "";
       const assistantResponsesForFileActions: string[] = [];
 
       setMessages((prev: ChatMessage[]) => [
@@ -923,25 +948,16 @@ export default function App() {
         { role: "assistant", content: "" },
       ]);
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          assistantMessage += decoder.decode();
-          break;
-        }
-
-        const chunk = decoder.decode(value, { stream: true });
-        assistantMessage += chunk;
-
+      const assistantMessage = await readUtf8Stream(reader, (content) => {
         setMessages((prev: ChatMessage[]) => {
           const newMessages = [...prev];
           newMessages[newMessages.length - 1] = {
             role: "assistant",
-            content: assistantMessage,
+            content,
           };
           return newMessages;
         });
-      }
+      });
 
       if (!assistantMessage.trim()) {
         const emptyMessage = t("emptyServerResponse", language);
@@ -985,6 +1001,7 @@ export default function App() {
           safeMaxAgentLoops,
         );
         let consecutiveErrors = 0;
+        let consecutiveFailedActionLoops = 0;
         let useScreenshotFallback = operationMode === "screenshot";
 
         while (
@@ -1090,11 +1107,18 @@ export default function App() {
           // Track consecutive errors for hybrid mode fallback
           if (errorCount > 0) {
             consecutiveErrors++;
-            // In hybrid mode, switch to screenshot after 3 consecutive errors
+            if (errorCount === executableActions.length) {
+              consecutiveFailedActionLoops++;
+            } else {
+              consecutiveFailedActionLoops = 0;
+            }
+
             if (
-              operationMode === "hybrid" &&
-              consecutiveErrors >= 3 &&
-              !useScreenshotFallback
+              shouldEnableScreenshotFallback(
+                operationMode,
+                consecutiveErrors,
+                useScreenshotFallback,
+              )
             ) {
               console.log(
                 "[Agent] Hybrid mode: switching to screenshot fallback after 3 consecutive errors",
@@ -1106,6 +1130,7 @@ export default function App() {
             }
           } else {
             consecutiveErrors = 0;
+            consecutiveFailedActionLoops = 0;
           }
 
           const resultMessage = `🤖 [Loop ${loopCount}/${safeMaxAgentLoops}] ${t("executionResult", language)}\n${actionResults.join("\n")}`;
@@ -1113,6 +1138,23 @@ export default function App() {
             ...prev,
             { role: "assistant", content: resultMessage },
           ]);
+
+          if (
+            shouldStopAutonomousLoopAfterFailures({
+              operationMode,
+              useScreenshotFallback,
+              consecutiveFailedActionLoops,
+            })
+          ) {
+            setMessages((prev: ChatMessage[]) => [
+              ...prev,
+              {
+                role: "assistant",
+                content: t("repeatedActionFailures", language),
+              },
+            ]);
+            break;
+          }
 
           // Only continue autonomous loop in agent mode
           // For chat mode, stop after first execution (user can click "つづけて" to continue)
@@ -1214,33 +1256,25 @@ export default function App() {
               console.error("Continue response has no stream body");
               break;
             }
-            currentResponse = "";
-            const continueDecoder = new TextDecoder();
 
             setMessages((prev: ChatMessage[]) => [
               ...prev,
               { role: "assistant", content: "" },
             ]);
 
-            while (true) {
-              const { done, value } = await continueReader.read();
-              if (done) {
-                currentResponse += continueDecoder.decode();
-                break;
-              }
-
-              const chunk = continueDecoder.decode(value, { stream: true });
-              currentResponse += chunk;
-
-              setMessages((prev: ChatMessage[]) => {
-                const newMessages = [...prev];
-                newMessages[newMessages.length - 1] = {
-                  role: "assistant",
-                  content: currentResponse,
-                };
-                return newMessages;
-              });
-            }
+            currentResponse = await readUtf8Stream(
+              continueReader,
+              (content) => {
+                setMessages((prev: ChatMessage[]) => {
+                  const newMessages = [...prev];
+                  newMessages[newMessages.length - 1] = {
+                    role: "assistant",
+                    content,
+                  };
+                  return newMessages;
+                });
+              },
+            );
 
             if (!currentResponse.trim()) {
               setMessages((prev: ChatMessage[]) => {
@@ -1466,14 +1500,38 @@ export default function App() {
       {/* Connection Error Banner */}
       {!isConnected && (
         <div className="px-4 py-2 bg-red-100 text-red-700 text-sm">
-          {t("connectionError", language)}
+          <div>{t("connectionError", language)}</div>
+          {connectionErrorDetail && (
+            <div className="mt-1 text-xs break-all">
+              {connectionErrorDetail}
+            </div>
+          )}
           <button
             onClick={() => {
               void checkConnection();
             }}
-            className="ml-2 underline hover:no-underline"
+            className="mt-1 underline hover:no-underline"
           >
             {t("reconnectLink", language)}
+          </button>
+        </div>
+      )}
+
+      {isConnected && modelFetchFailed && (
+        <div className="px-4 py-2 bg-amber-100 text-amber-800 text-sm border-b border-amber-200">
+          <div>{t("modelFetchFailed", language)}</div>
+          {modelFetchErrorDetail && (
+            <div className="mt-1 text-xs break-all">
+              {modelFetchErrorDetail}
+            </div>
+          )}
+          <button
+            onClick={() => {
+              void fetchAvailableModels();
+            }}
+            className="mt-1 underline hover:no-underline"
+          >
+            {t("refresh", language)}
           </button>
         </div>
       )}

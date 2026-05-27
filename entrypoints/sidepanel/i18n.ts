@@ -31,6 +31,8 @@ export const translations = {
       "⚠️ 続行応答が空だったため、自律実行を停止しました。",
     maxAgentLoopsReached:
       "⚠️ 最大ループ回数 ({count}) に達したため、自律実行を停止しました。",
+    repeatedActionFailures:
+      "⚠️ 同じ失敗が続いたため、自律実行を停止しました。ページ状態を確認してから再試行してください。",
     systemPageUnsupported:
       "[システムページ: {url}] - このページの内容は取得できません",
     highRiskActionBlocked:
@@ -105,6 +107,8 @@ export const translations = {
       "⚠️ Continuation response was empty, so autonomous execution was stopped.",
     maxAgentLoopsReached:
       "⚠️ Reached maximum loop count ({count}), so autonomous execution was stopped.",
+    repeatedActionFailures:
+      "⚠️ Autonomous execution stopped after repeated action failures. Check the current page state and try again.",
     systemPageUnsupported:
       "[System page: {url}] - Cannot access content on this page",
     highRiskActionBlocked:
