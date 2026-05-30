@@ -23,7 +23,41 @@ describe("buildDisplayedCopilotModels", () => {
     ]);
   });
 
-  it("filters to supported vendors and families", () => {
+  it("hides internal and utility Copilot models from the selector", () => {
+    const models: ModelInfo[] = [
+      {
+        provider: "copilot",
+        id: "claude-opus-4.7-1m-internal",
+        name: "Claude Opus 4.7 (Internal only)",
+      },
+      {
+        provider: "copilot",
+        id: "copilot-utility-small",
+        name: "GPT-4o mini (copilot-utility-small)",
+      },
+      {
+        provider: "copilot",
+        id: "oswe-vscode-modelD",
+        name: "MAI-Code-1-Flash",
+      },
+      { provider: "copilot", id: "claude-opus-4", name: "Claude Opus 4" },
+    ];
+
+    expect(buildDisplayedCopilotModels(models, "claude-opus-4")).toEqual([
+      { value: "claude-opus-4", label: "Claude Opus 4" },
+    ]);
+  });
+
+  it("does not re-add a hidden model just because it is selected", () => {
+    expect(
+      buildDisplayedCopilotModels([], "claude-opus-4.7-1m-internal"),
+    ).not.toContainEqual({
+      value: "claude-opus-4.7-1m-internal",
+      label: "claude-opus-4.7-1m-internal",
+    });
+  });
+
+  it("keeps normal Copilot models and hides non-Copilot providers", () => {
     const models: ModelInfo[] = [
       { provider: "anthropic", id: "claude-opus-4", name: "Claude Opus 4" },
       {
@@ -31,17 +65,12 @@ describe("buildDisplayedCopilotModels", () => {
         id: "custom-local-model",
         name: "Custom Local Model",
       },
+      { provider: "copilot", id: "gpt-5.2", name: "GPT-5.2" },
     ];
 
     expect(buildDisplayedCopilotModels(models, "claude-opus-4")).toEqual([
-      { value: "gpt-4o", label: "GPT-4o" },
-      { value: "gpt-4o-mini", label: "GPT-4o mini" },
-      { value: "claude-3.5-sonnet", label: "Claude 3.5 Sonnet" },
-      { value: "claude-sonnet-4", label: "Claude Sonnet 4" },
-      { value: "claude-opus-4", label: "Claude Opus 4" },
-      { value: "o1", label: "o1" },
-      { value: "o1-mini", label: "o1 mini" },
-      { value: "gemini-2.0-flash", label: "Gemini 2.0 Flash" },
+      { value: "claude-opus-4", label: "claude-opus-4" },
+      { value: "gpt-5.2", label: "GPT-5.2" },
     ]);
   });
 });

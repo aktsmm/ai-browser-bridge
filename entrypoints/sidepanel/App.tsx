@@ -30,14 +30,15 @@ import {
   buildBlogDraftContent,
   buildSavedMarkdownContent,
 } from "./artifact-template";
-import {
-  buildAttachmentDisplayText,
-  type ChatAttachment,
-} from "./attachments";
+import { buildAttachmentDisplayText, type ChatAttachment } from "./attachments";
 import { localizeFileOperationError } from "./file-operation-error";
 import { fetchModelsWithRetry } from "./model-fetch";
 import { readUtf8Stream } from "./stream-reader";
-import { type PendingAction, toPendingPrompt } from "./pending-action";
+import {
+  getPendingActionTabId,
+  type PendingAction,
+  toPendingPrompt,
+} from "./pending-action";
 import {
   normalizeDownloadRelativePath,
   shouldFallbackToDownloadsFromWorkspaceError,
@@ -213,6 +214,8 @@ export default function App() {
   const screenshotPermissionWarnedRef = useRef(false);
   const settingsLoadedRef = useRef(false);
   const pendingPromptDispatchRef = useRef<string | null>(null);
+  const pendingPromptTabIdRef = useRef<number | null>(null);
+  const activeContentTabIdRef = useRef<number | null>(null);
   const languageRef = useRef<Language>("ja");
 
   // Load settings from storage
@@ -300,7 +303,9 @@ export default function App() {
           setSaveDestinationMode(result.saveDestinationMode);
         }
         if (typeof result.saveRelativePath === "string") {
-          setSaveRelativePath(result.saveRelativePath || DEFAULT_SAVE_RELATIVE_PATH);
+          setSaveRelativePath(
+            result.saveRelativePath || DEFAULT_SAVE_RELATIVE_PATH,
+          );
         }
 
         if (shouldForceFullAutoMigration) {
@@ -329,6 +334,9 @@ export default function App() {
           effectiveLanguage,
         );
         if (nextPendingPrompt) {
+          pendingPromptTabIdRef.current = getPendingActionTabId(
+            result.pendingAction,
+          );
           setPendingPrompt(nextPendingPrompt);
         }
 
@@ -364,6 +372,7 @@ export default function App() {
       }
       const prompt = toPendingPrompt(newValue, languageRef.current);
       if (prompt) {
+        pendingPromptTabIdRef.current = getPendingActionTabId(newValue);
         setPendingPrompt(prompt);
       }
     };
@@ -599,7 +608,10 @@ export default function App() {
         options.content,
       );
 
-      if (!workspaceResult.ok && workspaceResult.error?.includes("File already exists")) {
+      if (
+        !workspaceResult.ok &&
+        workspaceResult.error?.includes("File already exists")
+      ) {
         targetPath = withTimestampSuffix(targetPath);
         workspaceResult = await postFileOperation(
           "create",
@@ -636,10 +648,7 @@ export default function App() {
         filename: normalizedPath,
         error: localizeFileOperationError(workspaceResult.error, {
           invalidPath: t("saveFailureInvalidPath", language),
-          pathEscapesWorkspace: t(
-            "saveFailurePathEscapesWorkspace",
-            language,
-          ),
+          pathEscapesWorkspace: t("saveFailurePathEscapesWorkspace", language),
           notAFile: t("saveFailureNotAFile", language),
           fileAlreadyExists: t("saveFailureFileAlreadyExists", language),
         }),
@@ -671,7 +680,10 @@ export default function App() {
   };
 
   const getCurrentPageMetadata = async () => {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const [tab] = await chrome.tabs.query({
+      active: true,
+      currentWindow: true,
+    });
     return {
       pageTitle: tab?.title || "Untitled Page",
       pageUrl: tab?.url || "",
@@ -708,7 +720,9 @@ export default function App() {
     ]);
   };
 
-  const saveLatestAssistantMarkdown = async (kind: "summary" | "blog-draft") => {
+  const saveLatestAssistantMarkdown = async (
+    kind: "summary" | "blog-draft",
+  ) => {
     const assistantContent = getLatestAssistantMessage().trim();
     if (!assistantContent) {
       pushSaveResultMessage({
@@ -769,16 +783,34 @@ export default function App() {
     }
   };
 
+  const captureScreenshotForActiveContentTab = async (): Promise<string> => {
+    const targetTabId = activeContentTabIdRef.current;
+    if (typeof targetTabId === "number") {
+      const tab = await chrome.tabs.get(targetTabId).catch(() => undefined);
+      if (!tab?.active) {
+        return "";
+      }
+    }
+
+    return await captureScreenshot();
+  };
+
   const extractPageContent = async (options?: {
     mode?: "interactive" | "content";
     autoScrollForLazyLoad?: boolean;
   }): Promise<string> => {
     try {
-      const [tab] = await chrome.tabs.query({
-        active: true,
-        currentWindow: true,
-      });
-      if (!tab.id || !tab.url) return "";
+      const targetTabId = activeContentTabIdRef.current;
+      const tab =
+        typeof targetTabId === "number"
+          ? await chrome.tabs.get(targetTabId).catch(() => undefined)
+          : (
+              await chrome.tabs.query({
+                active: true,
+                currentWindow: true,
+              })
+            )[0];
+      if (!tab?.id || !tab.url) return "";
 
       // chrome://, edge://, about: などのシステムページはスキップ
       if (
@@ -1176,10 +1208,12 @@ export default function App() {
       if (operationMode === "screenshot") {
         // Screenshot mode: capture screenshot + DOM elements for ref-based clicking
         try {
-          screenshotBase64 = await captureScreenshot();
+          screenshotBase64 = await captureScreenshotForActiveContentTab();
           // Also get DOM elements for ref-based clicking
           const domContent = await extractPageContent({ mode: "interactive" });
-          pageContent = `${t("screenshotAttachedContext", language)}\n\n${domContent}`;
+          pageContent = screenshotBase64
+            ? `${t("screenshotAttachedContext", language)}\n\n${domContent}`
+            : domContent;
         } catch (e) {
           console.error("Screenshot failed:", e);
           maybeWarnScreenshotPermission(e);
@@ -1459,13 +1493,17 @@ export default function App() {
 
           if (useScreenshotFallback) {
             try {
-              updatedScreenshot = await captureScreenshot();
+              updatedScreenshot = await captureScreenshotForActiveContentTab();
               // Also get DOM elements for ref-based clicking
               const domContent = await extractPageContent({
                 mode: "interactive",
               });
-              updatedPageContent = `${t("screenshotAttachedShort", language)}\n\n${domContent}`;
-              console.log("[Agent] Screenshot captured for fallback mode");
+              updatedPageContent = updatedScreenshot
+                ? `${t("screenshotAttachedShort", language)}\n\n${domContent}`
+                : domContent;
+              if (updatedScreenshot) {
+                console.log("[Agent] Screenshot captured for fallback mode");
+              }
             } catch (e) {
               console.error("Screenshot fallback failed:", e);
               maybeWarnScreenshotPermission(e);
@@ -1730,12 +1768,18 @@ export default function App() {
     }
 
     const prompt = pendingPrompt;
+    const targetTabId = pendingPromptTabIdRef.current;
     pendingPromptDispatchRef.current = prompt;
+    activeContentTabIdRef.current = targetTabId;
     setPendingPrompt(null);
+    pendingPromptTabIdRef.current = null;
     chrome.storage.local.remove("pendingAction");
     void sendMessage(prompt).finally(() => {
       if (pendingPromptDispatchRef.current === prompt) {
         pendingPromptDispatchRef.current = null;
+      }
+      if (activeContentTabIdRef.current === targetTabId) {
+        activeContentTabIdRef.current = null;
       }
     });
   }, [isLoading, pendingPrompt]);

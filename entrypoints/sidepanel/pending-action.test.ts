@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { toPendingPrompt } from "./pending-action";
+import {
+  getPendingActionTabId,
+  getSummarizeAndSavePrompt,
+  toPendingPrompt,
+} from "./pending-action";
 
 describe("toPendingPrompt", () => {
   it("returns null for null or non-object input", () => {
@@ -16,11 +20,35 @@ describe("toPendingPrompt", () => {
   });
 
   it("converts summarize action to a localized prompt", () => {
-    expect(toPendingPrompt({ type: "summarize" }, "ja")).toBe(
-      "このページを要約して",
+    expect(toPendingPrompt({ type: "summarize" }, "ja")).toContain("3行概要");
+    expect(toPendingPrompt({ type: "summarize" }, "ja")).toContain(
+      "ブラウザ操作、ページ遷移、追加クリックはしないでください",
     );
-    expect(toPendingPrompt({ type: "summarize" }, "en")).toBe(
-      "Summarize this page",
+    expect(toPendingPrompt({ type: "summarize" }, "en")).toContain(
+      "three-line summary",
+    );
+    expect(toPendingPrompt({ type: "summarize" }, "en")).toContain(
+      "Do not navigate",
+    );
+  });
+
+  it("extracts the source tab id from a pending action", () => {
+    expect(getPendingActionTabId({ type: "summarize", tabId: 123 })).toBe(123);
+    expect(getPendingActionTabId({ type: "summarize", tabId: 1.5 })).toBeNull();
+    expect(
+      getPendingActionTabId({ type: "summarize", tabId: "123" }),
+    ).toBeNull();
+    expect(getPendingActionTabId(null)).toBeNull();
+  });
+
+  it("builds a structured summarize-and-save prompt", () => {
+    expect(getSummarizeAndSavePrompt("ja")).toContain("3行概要");
+    expect(getSummarizeAndSavePrompt("ja")).toContain(
+      "Markdownとして保存してください",
+    );
+    expect(getSummarizeAndSavePrompt("en")).toContain("three-line summary");
+    expect(getSummarizeAndSavePrompt("en")).toContain(
+      "save this summary as Markdown",
     );
   });
 

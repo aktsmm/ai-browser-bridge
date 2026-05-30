@@ -50,4 +50,12 @@ describe("readUtf8Stream", () => {
     await expect(readUtf8Stream(reader)).rejects.toThrow("stream failed");
     expect(reader.cancel).toHaveBeenCalledTimes(1);
   });
+
+  it("preserves the original stream error when best-effort cancel also fails", async () => {
+    const reader = createReader(["partial", new Error("stream failed")]);
+    reader.cancel.mockRejectedValueOnce(new Error("cancel failed"));
+
+    await expect(readUtf8Stream(reader)).rejects.toThrow("stream failed");
+    expect(reader.cancel).toHaveBeenCalledTimes(1);
+  });
 });

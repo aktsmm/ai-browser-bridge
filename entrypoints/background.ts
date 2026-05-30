@@ -17,7 +17,15 @@ export default defineBackground({
     };
 
     const setPendingAction = async (
-      pendingAction: { type: "question"; text: string } | { type: "summarize" },
+      pendingAction:
+        | {
+            type: "question";
+            text: string;
+            tabId?: number;
+            url?: string;
+            title?: string;
+          }
+        | { type: "summarize"; tabId?: number; url?: string; title?: string },
     ): Promise<void> => {
       try {
         await browser.storage.local.set({ pendingAction });
@@ -65,12 +73,18 @@ export default defineBackground({
           await setPendingAction({
             type: "question",
             text: info.selectionText,
+            tabId: tab.id,
+            url: tab.url,
+            title: tab.title,
           });
         }
 
         if (info.menuItemId === "summarizePage") {
           await setPendingAction({
             type: "summarize",
+            tabId: tab.id,
+            url: tab.url,
+            title: tab.title,
           });
         }
 

@@ -16,34 +16,39 @@ export const FALLBACK_COPILOT_MODELS: CopilotModelOption[] = [
   { value: "gemini-2.0-flash", label: "Gemini 2.0 Flash" },
 ];
 
-const ALLOWED_VENDORS = ["anthropic", "openai", "google", "copilot"];
-const ALLOWED_FAMILIES = [
-  "gpt-4o",
-  "gpt-4o-mini",
-  "gpt-4",
-  "gpt-4-turbo",
-  "o1",
-  "o1-mini",
-  "o1-preview",
-  "o3",
-  "o3-mini",
-  "claude-3.5-sonnet",
-  "claude-3-opus",
-  "claude-3-sonnet",
-  "claude-3-haiku",
-  "claude-sonnet-4",
-  "claude-opus-4",
-  "gemini-2.0-flash",
-  "gemini-1.5-pro",
-  "gemini-1.5-flash",
-  "gemini-pro",
-];
+function isUserVisibleCopilotModel(model: ModelInfo): boolean {
+  const id = model.id.toLowerCase();
+  const name = model.name.toLowerCase();
+  const combined = `${id} ${name}`;
+
+  if (
+    ["internal only", "internal", "copilot-utility", "oswe-", "modeld"].some(
+      (marker) => combined.includes(marker),
+    )
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function isUserVisibleCopilotModelId(modelId: string): boolean {
+  return isUserVisibleCopilotModel({
+    provider: "copilot",
+    id: modelId,
+    name: modelId,
+  });
+}
 
 function ensureSelectedModelOption(
   models: CopilotModelOption[],
   selectedModel: string,
 ): CopilotModelOption[] {
-  if (!selectedModel || models.some((model) => model.value === selectedModel)) {
+  if (
+    !selectedModel ||
+    models.some((model) => model.value === selectedModel) ||
+    !isUserVisibleCopilotModelId(selectedModel)
+  ) {
     return models;
   }
 
@@ -55,13 +60,7 @@ export function buildDisplayedCopilotModels(
   selectedModel: string,
 ): CopilotModelOption[] {
   const filteredModels = availableModels.filter(
-    (model) =>
-      ALLOWED_VENDORS.some((vendor) =>
-        model.provider.toLowerCase().includes(vendor),
-      ) ||
-      ALLOWED_FAMILIES.some((family) =>
-        model.id.toLowerCase().includes(family),
-      ),
+    (model) => model.provider === "copilot" && isUserVisibleCopilotModel(model),
   );
 
   const copilotModels = filteredModels.filter(

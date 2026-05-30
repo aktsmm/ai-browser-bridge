@@ -12,6 +12,10 @@ import {
   truncateAttachmentText,
   type ChatAttachment,
 } from "../attachments";
+import {
+  getSummarizeAndSavePrompt,
+  getSummarizePrompt,
+} from "../pending-action";
 
 type QuickAction = {
   icon: string;
@@ -42,42 +46,58 @@ function collapseToolLogs(content: string): string {
   return cleaned;
 }
 
-function getQuickActions(lang: Language): QuickAction[] {
+export function getQuickActions(lang: Language): QuickAction[] {
   return lang === "ja"
     ? [
-        { icon: "➡️", label: "続けて", prompt: "続けて" },
+        {
+          icon: "➡️",
+          label: "続けて",
+          prompt:
+            "直前の回答を、同じ前提・同じ出力形式のまま続けてください。新しいブラウザ操作やページ遷移はしないでください。",
+        },
         {
           icon: "🔑",
           label: "要点",
-          prompt: "要点を箇条書きで教えて",
+          prompt:
+            "抽出済み本文だけを根拠に、重要な要点を5件まで箇条書きで整理してください。各項目は1文で、根拠になる本文の表現を短く含めてください。新しいブラウザ操作やページ遷移はしないでください。",
         },
         {
           icon: "✅",
           label: "次どうする？",
-          prompt: "次にやるべきことを3つ提案して",
+          prompt:
+            "このページ内容を踏まえ、次に取るべき行動を3つ提案してください。各提案は「目的」「理由」「最初の一手」を1行ずつで簡潔に書いてください。新しいブラウザ操作やページ遷移はしないでください。",
         },
         {
           icon: "💾",
           label: "MD保存",
-          prompt: "Markdownでまとめて保存して",
+          prompt:
+            "直前の回答をMarkdownとして保存してください。見出し、箇条書き、出典URLが分かる形に整え、本文を新たに作り直さないでください。新しいブラウザ操作やページ遷移はしないでください。",
         },
       ]
     : [
-        { icon: "➡️", label: "Continue", prompt: "Continue" },
+        {
+          icon: "➡️",
+          label: "Continue",
+          prompt:
+            "Continue the previous answer with the same assumptions and output format. Do not navigate, click, or perform new browser actions.",
+        },
         {
           icon: "🔑",
           label: "Key points",
-          prompt: "List the key points as bullet points",
+          prompt:
+            "Using only the extracted page text, list up to five key points. Keep each point to one sentence and include a short phrase from the source text when useful. Do not navigate, click, or perform new browser actions.",
         },
         {
           icon: "✅",
           label: "Next steps",
-          prompt: "Suggest 3 next steps",
+          prompt:
+            "Based on this page, suggest three next steps. For each step, include the goal, why it matters, and the first action. Do not navigate, click, or perform new browser actions.",
         },
         {
           icon: "💾",
           label: "Save as MD",
-          prompt: "Save the result as a Markdown file",
+          prompt:
+            "Save the previous answer as Markdown. Preserve the substance, add clear headings and bullets, and include the source URL when available. Do not navigate, click, or perform new browser actions.",
         },
       ];
 }
@@ -105,9 +125,9 @@ export function Chat({
 }: ChatProps) {
   const [input, setInput] = useState("");
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
-  const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>(
-    [],
-  );
+  const [pendingAttachments, setPendingAttachments] = useState<
+    ChatAttachment[]
+  >([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -291,64 +311,72 @@ export function Chat({
                     {
                       icon: "📝",
                       label: "要約して",
-                      prompt: "このページを要約して",
+                      prompt: getSummarizePrompt("ja"),
                     },
                     {
                       icon: "🔑",
                       label: "要点を抽出",
-                      prompt: "このページの要点を箇条書きで教えて",
+                      prompt:
+                        "抽出済み本文だけを根拠に、このページの要点を5件まで箇条書きで整理してください。各項目は1文で、重要な人物・組織・数値があれば含めてください。ブラウザ操作やページ遷移はしないでください。",
                     },
                     {
                       icon: "🌐",
                       label: "英語に翻訳",
-                      prompt: "このページの内容を英語に翻訳して",
+                      prompt:
+                        "抽出済み本文だけを根拠に、このページの主要内容を自然な英語に翻訳してください。広告・ナビゲーション・重複文は省き、見出しと箇条書きで読みやすくしてください。",
                     },
                     {
                       icon: "🔗",
                       label: "リンク一覧",
-                      prompt: "このページのリンク一覧を抽出して",
+                      prompt:
+                        "抽出済みページ情報からリンク一覧を作ってください。リンク先タイトルまたは周辺テキスト、URL、用途の推定を表で整理し、不明なものは不明と書いてください。新しいページへ遷移しないでください。",
                     },
                     {
                       icon: "❓",
                       label: "Q&A作成",
-                      prompt: "このページの内容からQ&Aを5つ作って",
+                      prompt:
+                        "抽出済み本文だけを根拠に、理解確認用のQ&Aを5件作ってください。各Q&Aは「質問」「回答」「根拠になる本文の要約」を含め、推測で断定しないでください。",
                     },
                     {
                       icon: "💾",
                       label: "MDで保存",
-                      prompt: "このページを要約してMarkdownでまとめて保存して",
+                      prompt: getSummarizeAndSavePrompt("ja"),
                     },
                   ]
                 : [
                     {
                       icon: "📝",
                       label: "Summarize",
-                      prompt: "Summarize this page",
+                      prompt: getSummarizePrompt("en"),
                     },
                     {
                       icon: "🔑",
                       label: "Key Points",
-                      prompt: "List the key points of this page",
+                      prompt:
+                        "Using only the extracted page text, list up to five key points. Keep each point to one sentence and include important people, organizations, or numbers when present. Do not navigate or click.",
                     },
                     {
                       icon: "🌐",
                       label: "Translate to JP",
-                      prompt: "Translate this page to Japanese",
+                      prompt:
+                        "Translate the main content of the extracted page text into natural Japanese. Omit ads, navigation, and repeated boilerplate. Use headings and bullets for readability.",
                     },
                     {
                       icon: "🔗",
                       label: "Extract Links",
-                      prompt: "Extract all links from this page",
+                      prompt:
+                        "Extract a link list from the page context. For each link, include nearby title/text, URL, and likely purpose in a table. Do not navigate to new pages.",
                     },
                     {
                       icon: "❓",
                       label: "Generate Q&A",
-                      prompt: "Create 5 Q&A pairs from this page",
+                      prompt:
+                        "Create five comprehension Q&A pairs using only the extracted page text. Include Question, Answer, and a short evidence summary. Do not assert unsupported facts.",
                     },
                     {
                       icon: "💾",
                       label: "Save as MD",
-                      prompt: "Summarize this page and save as Markdown",
+                      prompt: getSummarizeAndSavePrompt("en"),
                     },
                   ]
               ).map((card) => (

@@ -19,7 +19,30 @@ interface FetchModelsOptions {
 }
 
 function buildDebugContext(baseUrl: string, extensionOrigin: string): string {
-  return `Endpoint: ${baseUrl}/models | Origin: ${extensionOrigin}`;
+  return `Endpoint: ${baseUrl}/models | Extension origin: ${extensionOrigin}`;
+}
+
+function extractResponseErrorMessage(responseText: string): string {
+  const body = responseText.trim();
+  if (!body) {
+    return "";
+  }
+
+  try {
+    const parsed = JSON.parse(body) as unknown;
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      "error" in parsed &&
+      typeof (parsed as { error?: unknown }).error === "string"
+    ) {
+      return (parsed as { error: string }).error.trim();
+    }
+  } catch {
+    // Non-JSON response bodies are still useful diagnostics.
+  }
+
+  return body;
 }
 
 function formatHttpErrorDetail(
@@ -29,17 +52,26 @@ function formatHttpErrorDetail(
   extensionOrigin: string,
 ): string {
   const debugContext = buildDebugContext(baseUrl, extensionOrigin);
-  const body = responseText.trim();
+  const errorMessage = extractResponseErrorMessage(responseText);
+  const diagnostic = errorMessage ? ` | ${errorMessage}` : "";
 
   if (response.status === 401) {
-    return `Model list request was rejected as an unauthorized client (401). ${debugContext}${body ? ` | ${body}` : ""}`;
+    return `Model list request was rejected as an unauthorized client (401). ${debugContext}${diagnostic}`;
   }
 
   if (response.status === 403) {
-    return `Model list request was rejected for this extension origin (403). Add ${extensionOrigin} to copilotBrowserBridge.allowedExtensionOrigins if needed. ${debugContext}${body ? ` | ${body}` : ""}`;
+    if (errorMessage.includes("Origin header is required")) {
+      return `Model list request was rejected by an older VS Code bridge that still requires an Origin header (403). Update/reload the VS Code extension so the local bridge accepts trusted extension requests without Origin. ${debugContext}${diagnostic}`;
+    }
+
+    if (errorMessage.includes("Forbidden origin")) {
+      return `Model list request was rejected for this extension origin (403). Add ${extensionOrigin} to copilotBrowserBridge.allowedExtensionOrigins if needed. ${debugContext}${diagnostic}`;
+    }
+
+    return `Model list request was rejected for this extension origin (403). Add ${extensionOrigin} to copilotBrowserBridge.allowedExtensionOrigins if needed. ${debugContext}${diagnostic}`;
   }
 
-  return `Model list request failed (${response.status} ${response.statusText}). ${debugContext}${body ? ` | ${body}` : ""}`;
+  return `Model list request failed (${response.status} ${response.statusText}). ${debugContext}${diagnostic}`;
 }
 
 function isAbortError(error: unknown): boolean {
@@ -116,8 +148,7 @@ export async function fetchModelsWithRetry({
       };
     } catch (error) {
       if (isAbortError(error)) {
-        lastErrorDetail =
-          `Timed out after ${timeoutMs}ms while requesting the model list. ${buildDebugContext(baseUrl, extensionOrigin)}`;
+        lastErrorDetail = `Timed out after ${timeoutMs}ms while requesting the model list. ${buildDebugContext(baseUrl, extensionOrigin)}`;
       } else {
         lastErrorDetail = `${error instanceof Error ? error.message : String(error)}. ${buildDebugContext(baseUrl, extensionOrigin)}`;
       }
