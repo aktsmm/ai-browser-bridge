@@ -88,6 +88,22 @@ async function main() {
     );
   }
 
+  // Regression guard: Chrome omits the Origin header when the extension fetches
+  // a host it already has host_permissions for (the local bridge on localhost),
+  // so the server must not hard-require an Origin header or the side panel
+  // breaks with a 403. The trusted client header is the real authorization gate.
+  if (vscodeServerSource.includes("Origin header is required")) {
+    failures.push(
+      "server.ts must not require an Origin header (Chrome omits it for host_permissions hosts); rely on the trusted client header instead",
+    );
+  }
+
+  if (!vscodeServerSource.includes("evaluateBridgeRequestGate({")) {
+    failures.push(
+      "server.ts must authorize requests through evaluateBridgeRequestGate (trusted client header gate)",
+    );
+  }
+
   if (failures.length > 0) {
     console.error("validate:bridge failed");
     for (const failure of failures) {
