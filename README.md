@@ -35,14 +35,14 @@ Available now: [Install from Chrome Web Store](https://chromewebstore.google.com
 
 ## Requirements
 
-- **Required (always)**: A local bridge server: either [GitHub Copilot Browser Bridge for VS Code](https://github.com/aktsmm/copilot-browser-bridge-vscode) or the standalone companion in `../standalone-bridge`
+- **Required (always)**: A local bridge server: either [GitHub Copilot Browser Bridge for VS Code](https://github.com/aktsmm/copilot-browser-bridge-vscode) or the standalone companion in `standalone-bridge`
 - **LLM provider**: **GitHub Copilot subscription** (only when using Copilot provider) or **Local LLM** (LM Studio, etc.)
 
 > GitHub Copilot SDK and GitHub Copilot CLI providers require a local bridge process. Use the VS Code extension bridge or start the standalone companion; the Chrome Web Store extension alone cannot start local SDK or CLI processes.
 
 ## Usage
 
-1. Launch a local bridge: VS Code extension (auto-start available) or `npm run start -- --port 3210 --workspace-root ..\\..` in `standalone-bridge`
+1. Launch a local bridge: VS Code extension (auto-start available) or `npm run start -- --port 3210 --workspace-root ..` in `standalone-bridge`
 2. Open Chrome extension side panel
 3. Enter questions or operation instructions on any web page
 
@@ -145,7 +145,7 @@ The extension no longer requests broad static site access. It reads the current 
 ## Related Projects
 
 - [GitHub Copilot Browser Bridge for VS Code](https://github.com/aktsmm/copilot-browser-bridge-vscode) - VS Code bridge option
-- [Standalone companion bridge](../standalone-bridge/README.md) - Node bridge option without the VS Code extension
+- [Standalone companion bridge](standalone-bridge/README.md) - Node bridge option without the VS Code extension
 
 ## Author
 

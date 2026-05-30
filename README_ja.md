@@ -35,14 +35,14 @@
 
 ## 📋 必要条件
 
-- **必須（常時）**: ローカル bridge server（[GitHub Copilot Browser Bridge for VS Code](https://github.com/aktsmm/copilot-browser-bridge-vscode) または `../standalone-bridge` の standalone companion）
+- **必須（常時）**: ローカル bridge server（[GitHub Copilot Browser Bridge for VS Code](https://github.com/aktsmm/copilot-browser-bridge-vscode) または `standalone-bridge` の standalone companion）
 - **LLMプロバイダー**: **GitHub Copilot サブスクリプション**（Copilotプロバイダーを使う場合のみ）または **ローカルLLM**（LM Studio等）
 
 > GitHub Copilot SDK / GitHub Copilot CLI provider を使う場合は、VS Code bridge または standalone companion のローカル bridge プロセスが必要です。Chrome Web Store 版単体ではローカル SDK / CLI プロセスを起動できません。
 
 ## 🎮 使い方
 
-1. ローカル bridge を起動（VS Code 拡張の自動起動、または `standalone-bridge` で `npm run start -- --port 3210 --workspace-root ..\\..`）
+1. ローカル bridge を起動（VS Code 拡張の自動起動、または `standalone-bridge` で `npm run start -- --port 3210 --workspace-root ..`）
 2. Chrome拡張機能のサイドパネルを開く
 3. 任意のWebページで質問や操作指示を入力
 
