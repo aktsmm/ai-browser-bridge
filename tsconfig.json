@@ -13,5 +13,5 @@
     "types": ["wxt/client"]
   },
   "include": ["**/*.ts", "**/*.tsx"],
-  "exclude": ["node_modules", ".output"]
+  "exclude": ["node_modules", ".output", "standalone-bridge/out"]
 }

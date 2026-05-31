@@ -4,7 +4,7 @@ import net from "net";
 import os from "os";
 import path from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { StandaloneBridgeServer } from "../src/index.js";
+import { StandaloneBridgeServer, buildSystemPrompt } from "../src/index.js";
 const TRUSTED_HEADERS = { "X-Copilot-Bridge-Client": "chrome-extension" };
 function getFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -395,5 +395,16 @@ describe("standalone bridge server", () => {
       },
     });
     expect(response.status).toBe(403);
+  });
+});
+
+describe("standalone prompt context", () => {
+  it("tells the model not to summarize unavailable page text", () => {
+    const prompt = buildSystemPrompt("");
+
+    expect(prompt).toContain("page text was not provided");
+    expect(prompt).toContain(
+      "Do not infer or summarize unavailable page content",
+    );
   });
 });

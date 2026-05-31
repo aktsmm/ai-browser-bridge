@@ -50,6 +50,10 @@ import {
 } from "./evaluate-setting-policy";
 import { parseBridgeCapabilities } from "./bridge-capabilities";
 import { formatConnectionFailureDetail } from "./connection-diagnostics";
+import {
+  buildPageContentUnavailableContext,
+  isPageContentUnavailableContext,
+} from "./page-content-diagnostics";
 
 const DEFAULT_SETTINGS: LLMSettings = {
   provider: "auto",
@@ -887,7 +891,12 @@ export default function App() {
                 currentWindow: true,
               })
             )[0];
-      if (!tab?.id || !tab.url) return "";
+      if (!tab?.id || !tab.url) {
+        return buildPageContentUnavailableContext({
+          lang: languageRef.current,
+          reason: "no-tab",
+        });
+      }
 
       // chrome://, edge://, about: などのシステムページはスキップ
       if (
@@ -896,7 +905,12 @@ export default function App() {
         tab.url.startsWith("about:") ||
         tab.url.startsWith("chrome-extension://")
       ) {
-        return t("systemPageUnsupported", language).replace("{url}", tab.url);
+        return buildPageContentUnavailableContext({
+          lang: languageRef.current,
+          reason: "unsupported-page",
+          url: tab.url,
+          title: tab.title,
+        });
       }
 
       const mode = options?.mode ?? "interactive";
@@ -1242,7 +1256,18 @@ export default function App() {
       return results[0]?.result || "";
     } catch (error) {
       console.warn("Failed to extract page content:", error);
-      return "";
+      const targetTabId = activeContentTabIdRef.current;
+      const tab =
+        typeof targetTabId === "number"
+          ? await chrome.tabs.get(targetTabId).catch(() => undefined)
+          : undefined;
+      return buildPageContentUnavailableContext({
+        lang: languageRef.current,
+        reason: "script-injection-failed",
+        url: tab?.url,
+        title: tab?.title,
+        detail: error instanceof Error ? error.message : String(error),
+      });
     }
   };
 
@@ -1302,6 +1327,16 @@ export default function App() {
           mode: wantsContentOnly ? "content" : "interactive",
           autoScrollForLazyLoad: wantsContentOnly && autoScrollForLazyLoad,
         });
+      }
+
+      if (wantsContentOnly && isPageContentUnavailableContext(pageContent)) {
+        setMessages((prev: ChatMessage[]) => [
+          ...prev,
+          {
+            role: "assistant",
+            content: t("pageContentUnavailableNotice", language),
+          },
+        ]);
       }
 
       // Send to VS Code extension

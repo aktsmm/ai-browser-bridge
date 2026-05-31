@@ -27,6 +27,8 @@ export const translations = {
       "⚠️ スクリーンショット権限が未付与です。拡張機能アイコンを一度クリックするか、権限変更後は拡張を削除→再インストールしてください。",
     screenshotFallbackFailed:
       "⚠️ スクリーンショット取得に失敗したため、テキストモードで続行します。",
+    pageContentUnavailableNotice:
+      "⚠️ ページ本文を取得できませんでした。要約や翻訳が必要な場合は、本文の貼り付け・ページ再読み込み・対象URL確認を行ってください。",
     emptyServerResponse:
       "⚠️ サーバーから空の応答が返されました。もう一度お試しください。",
     emptyContinuationResponse:
@@ -141,6 +143,8 @@ export const translations = {
       "⚠️ Screenshot permission is not granted. Click the extension icon once, or reinstall the extension after changing permissions.",
     screenshotFallbackFailed:
       "⚠️ Screenshot capture failed, so the bridge will continue in text mode.",
+    pageContentUnavailableNotice:
+      "⚠️ The page text could not be extracted. For summarization or translation, paste the page text, reload the page, or confirm the target URL.",
     emptyServerResponse:
       "⚠️ Server returned an empty response. Please try again.",
     emptyContinuationResponse:

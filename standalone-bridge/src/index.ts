@@ -390,10 +390,13 @@ function validateChatRequest(
   }
   return { ok: true, value: request as ChatRequest };
 }
-function buildSystemPrompt(pageContent: string, agentMode = false): string {
+export function buildSystemPrompt(
+  pageContent: string,
+  agentMode = false,
+): string {
   const actionDoc = `Use ACTION commands only when browser interaction is needed. Examples: [ACTION: click, ref:e5], [ACTION: type, ref:e5, text], [ACTION: navigate, https://example.com], [ACTION: screenshot]. Use FILE commands for artifacts: [FILE: create, output/report.md, content]. Respond in the user's language.`;
   if (!pageContent.trim())
-    return `You are a helpful browser assistant. ${actionDoc}`;
+    return `You are a helpful browser assistant. ${actionDoc}\n\nIf the user asks to summarize, translate, extract links, or create Q&A for the current page, clearly state that the page text was not provided. Do not infer or summarize unavailable page content. Ask the user to paste the page text, reload the page, or confirm the target URL.`;
   const page = pageContent.slice(0, agentMode ? 12_000 : 20_000);
   return `You are a helpful browser assistant. Analyze the current page and answer concisely.\n\n---PAGE CONTENT---\n${page}\n---END PAGE CONTENT---\n\n${actionDoc}`;
 }

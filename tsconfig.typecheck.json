@@ -9,6 +9,7 @@
   "exclude": [
     "node_modules",
     ".output",
+    "standalone-bridge/out",
     "entrypoints/sidepanel/chrome-shim.d.ts"
   ]
 }

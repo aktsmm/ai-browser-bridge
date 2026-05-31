@@ -9,12 +9,13 @@ export default [
       ".wxt/**",
       "node_modules/**",
       "public/**",
+      "standalone-bridge/out/**",
       "store-assets/**",
     ],
   },
   js.configs.recommended,
   {
-    files: ["entrypoints/**/*.{ts,tsx}", "wxt.config.ts"],
+    files: ["entrypoints/**/*.{ts,tsx}", "wxt.config.ts", "vitest.config.ts"],
     languageOptions: {
       parser: tsParser,
       parserOptions: {

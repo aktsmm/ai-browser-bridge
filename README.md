@@ -54,6 +54,14 @@ Available now: [Install from Chrome Web Store](https://chromewebstore.google.com
 "Fill in the form and submit"
 ```
 
+## Troubleshooting
+
+- If summarize/translate says page text is unavailable:
+  1. Reload the target page and retry once.
+  2. Confirm the request is not on a system page (`chrome://`, `edge://`, `about:`, `chrome-extension://`).
+  3. Reopen the side panel from the same tab and retry.
+  4. If needed, paste the target page text directly into chat as fallback context.
+
 ## Settings
 
 Configure from the side panel settings button:
