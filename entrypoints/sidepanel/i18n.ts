@@ -62,6 +62,7 @@ export const translations = {
     saveMarkdownAction: "この回答を保存",
     saveBlogDraftAction: "ブログ下書き保存",
     attachFiles: "添付",
+    removeAttachment: "添付を削除",
     attachedFiles: "添付ファイル",
     attachmentTextLabel: "テキスト",
     attachmentImageLabel: "画像",
@@ -94,9 +95,10 @@ export const translations = {
     model: "モデル",
     refresh: "🔄 更新",
     modelNotConnected:
-      "※ VS Code未接続のため GitHub Copilot の既定モデルを表示中",
+      "※ VS Code未接続のため GitHub Copilot のモデル一覧を取得できません。接続後に更新してください。",
     modelFetchFailed:
       "⚠️ VS Code への接続はありますが、GitHub Copilot のモデル一覧取得に失敗しました。更新を再試行してください。",
+    modelUnavailableOption: "利用可能な Copilot モデルがありません",
     endpoint: "エンドポイント",
     modelName: "モデル名 (空欄で自動検出)",
     browserActions: "ブラウザ操作",
@@ -178,6 +180,7 @@ export const translations = {
     saveMarkdownAction: "Save this answer",
     saveBlogDraftAction: "Save blog draft",
     attachFiles: "Attach",
+    removeAttachment: "Remove attachment",
     attachedFiles: "Attached files",
     attachmentTextLabel: "text",
     attachmentImageLabel: "image",
@@ -210,9 +213,10 @@ export const translations = {
     model: "Model",
     refresh: "🔄 Refresh",
     modelNotConnected:
-      "※ Showing default GitHub Copilot models (VS Code not connected)",
+      "※ GitHub Copilot models cannot be loaded until VS Code is connected. Connect and refresh to choose a model.",
     modelFetchFailed:
       "⚠️ Connected to VS Code, but failed to load the GitHub Copilot model list. Please refresh and try again.",
+    modelUnavailableOption: "No live Copilot models available",
     endpoint: "Endpoint",
     modelName: "Model name (auto-detect if empty)",
     browserActions: "Browser Actions",

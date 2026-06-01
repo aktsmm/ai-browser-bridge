@@ -126,6 +126,20 @@ describe("standalone bridge server", () => {
       "copilot-cli",
       "lm-studio",
     ]);
+    expect(body.providers).toContainEqual(
+      expect.objectContaining({
+        id: "vscode-lm",
+        status: "unavailable",
+        userSelectable: false,
+      }),
+    );
+    expect(body.providers).toContainEqual(
+      expect.objectContaining({
+        id: "copilot-sdk",
+        isExperimental: true,
+        userSelectable: false,
+      }),
+    );
   });
   it("supports workspace-relative file creation", async () => {
     const response = await fetch(`${baseUrl}/file`, {

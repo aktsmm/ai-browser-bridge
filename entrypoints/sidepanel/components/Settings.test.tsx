@@ -18,10 +18,13 @@ function buildSettings(provider: LLMSettings["provider"]): LLMSettings {
 function renderSettings(options?: {
   provider?: LLMSettings["provider"];
   isConnected?: boolean;
+  availableModels?: Array<{ provider: string; id: string; name: string }>;
+  modelFetchFailed?: boolean;
   capabilities?: BridgeCapabilities | null;
   capabilitiesErrorDetail?: string | null;
   language?: "ja" | "en";
   operationMode?: "text" | "hybrid" | "screenshot";
+  allowHighRiskActions?: boolean;
 }) {
   return renderToStaticMarkup(
     <Settings
@@ -29,8 +32,12 @@ function renderSettings(options?: {
       onSettingsChange={noop}
       onClose={noop}
       isConnected={options?.isConnected ?? true}
-      availableModels={[{ provider: "copilot", id: "gpt-4o", name: "GPT-4o" }]}
-      modelFetchFailed={false}
+      availableModels={
+        options?.availableModels ?? [
+          { provider: "copilot", id: "gpt-4o", name: "GPT-4o" },
+        ]
+      }
+      modelFetchFailed={options?.modelFetchFailed ?? false}
       bridgeCapabilities={options?.capabilities ?? null}
       capabilitiesErrorDetail={options?.capabilitiesErrorDetail ?? null}
       onRefreshCapabilities={noop}
@@ -47,7 +54,7 @@ function renderSettings(options?: {
       onOperationModeChange={noop}
       serverPort={3210}
       onServerPortChange={noop}
-      allowHighRiskActions={true}
+      allowHighRiskActions={options?.allowHighRiskActions ?? true}
       onAllowHighRiskActionsChange={noop}
       allowEvaluateAction={false}
       onAllowEvaluateActionChange={noop}
@@ -60,18 +67,20 @@ function renderSettings(options?: {
 }
 
 describe("Settings provider UI", () => {
-  it("renders all explicit provider choices including SDK and CLI", () => {
+  it("renders primary provider choices and keeps SDK/CLI out of normal selection", () => {
     const html = renderSettings();
 
     expect(html).toContain("Auto (Recommended)");
-    expect(html).toContain("GitHub Copilot (Chat)");
-    expect(html).toContain("GitHub Copilot (Agent)");
-    expect(html).toContain("GitHub Copilot SDK (Agent)");
-    expect(html).toContain("GitHub Copilot CLI");
+    expect(html).toContain("<fieldset");
+    expect(html).toContain("<legend");
+    expect(html).toContain("GitHub Copilot via VS Code");
+    expect(html).not.toContain("GitHub Copilot via VS Code (Chat)");
+    expect(html).not.toContain("GitHub Copilot via VS Code (Agent)");
     expect(html).toContain("LM Studio");
     expect(html).toContain(
-      "All current providers run through a local bridge: either the VS Code extension or the standalone companion.",
+      "SDK and CLI are shown in bridge status as diagnostic/fallback routes",
     );
+    expect(html).not.toContain("GitHub Copilot SDK (Agent)");
   });
 
   it("localizes Auto label and shows unchecked Auto route status", () => {
@@ -89,7 +98,7 @@ describe("Settings provider UI", () => {
       capabilities: {
         version: "0.1.16-test",
         bridge: "standalone",
-        recommended: { chat: "vscode-lm", agent: "copilot-sdk" },
+        recommended: { chat: "vscode-lm", agent: "vscode-lm" },
         providers: [
           {
             id: "copilot-sdk",
@@ -112,13 +121,10 @@ describe("Settings provider UI", () => {
 
     expect(html).toContain("Auto route");
     expect(html).toContain(
-      "Browser-agent modes try the Copilot SDK path first.",
+      "Auto prioritizes VS Code LM. CLI is used only as the last answer fallback.",
     );
-    expect(html.indexOf("1. Copilot SDK")).toBeLessThan(
-      html.indexOf("2. VS Code LM"),
-    );
-    expect(html.indexOf("2. VS Code LM")).toBeLessThan(
-      html.indexOf("3. Copilot CLI"),
+    expect(html.indexOf("1. VS Code LM")).toBeLessThan(
+      html.indexOf("2. Copilot CLI"),
     );
   });
 
@@ -126,17 +132,16 @@ describe("Settings provider UI", () => {
     const html = renderSettings({ provider: "auto", operationMode: "text" });
 
     expect(html).toContain(
-      "Text mode tries the lightweight VS Code LM path first.",
+      "Auto prioritizes VS Code LM. CLI is used only as the last answer fallback.",
     );
     expect(html.indexOf("1. VS Code LM")).toBeLessThan(
-      html.indexOf("2. Copilot SDK"),
+      html.indexOf("2. Copilot CLI"),
     );
   });
 
   it("hides Auto route details for explicit providers", () => {
-    const html = renderSettings({ provider: "copilot-sdk" });
+    const html = renderSettings({ provider: "copilot-agent" });
 
-    expect(html).toContain("GitHub Copilot SDK (Agent)");
     expect(html).not.toContain("Auto route");
     expect(html).not.toContain("1. Copilot SDK");
     expect(html).not.toContain("not checked");
@@ -148,7 +153,7 @@ describe("Settings provider UI", () => {
       capabilities: {
         version: "0.1.16-test",
         bridge: "standalone",
-        recommended: { chat: "vscode-lm", agent: "copilot-sdk" },
+        recommended: { chat: "vscode-lm", agent: "vscode-lm" },
         providers: [
           {
             id: "vscode-lm",
@@ -159,6 +164,8 @@ describe("Settings provider UI", () => {
             id: "copilot-sdk",
             name: "GitHub Copilot SDK",
             status: "unavailable",
+            isExperimental: true,
+            userSelectable: false,
           },
           { id: "copilot-cli", name: "GitHub Copilot CLI", status: "unknown" },
         ],
@@ -166,9 +173,10 @@ describe("Settings provider UI", () => {
     });
 
     expect(html).toContain("利用可能な bridge provider を自動選択");
-    expect(html).toContain("ツール権限は既定でブロック");
-    expect(html).toContain("Copilot CLI prompt 経路を直接使用");
-    expect(html).toContain("Chrome 拡張単体ではなくローカル bridge が必要");
+    expect(html).toContain("Experimental / advanced fallback");
+    expect(html).toContain(
+      "通常は Auto を使ってください。SDK / CLI は bridge 状態の診断と fallback 用に表示され、通常の provider としては選択しません。",
+    );
     expect(html).toContain("利用可能");
     expect(html).toContain("利用不可");
     expect(html).toContain("未確認");
@@ -188,7 +196,7 @@ describe("Settings provider UI", () => {
       capabilities: {
         version: "0.1.16-test",
         bridge: "standalone",
-        recommended: { chat: "vscode-lm", agent: "copilot-sdk" },
+        recommended: { chat: "vscode-lm", agent: "vscode-lm" },
         providers: [
           {
             id: "vscode-lm",
@@ -238,7 +246,26 @@ describe("Settings provider UI", () => {
   it("hides the Copilot model selector for the explicit CLI provider", () => {
     const html = renderSettings({ provider: "copilot-cli" });
 
-    expect(html).toContain("GitHub Copilot CLI");
+    expect(html).toContain("SDK and CLI are shown in bridge status");
     expect(html).not.toContain('aria-label="Model selection"');
+  });
+
+  it("explains disabled model selection with aria-describedby", () => {
+    const html = renderSettings({
+      availableModels: [],
+      modelFetchFailed: true,
+    });
+
+    expect(html).toContain('disabled=""');
+    expect(html).toContain('aria-describedby="copilot-model-help"');
+    expect(html).toContain('id="copilot-model-help"');
+    expect(html).toContain("failed to load the GitHub Copilot model list");
+  });
+
+  it("links the disabled evaluate toggle to its dependency hint", () => {
+    const html = renderSettings({ allowHighRiskActions: false });
+
+    expect(html).toContain('id="evaluate-action-hint"');
+    expect(html).toContain('aria-describedby="evaluate-action-hint"');
   });
 });

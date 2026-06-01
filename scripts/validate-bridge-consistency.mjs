@@ -150,22 +150,15 @@ async function main() {
     }
   }
 
-  const settingsProviders = [
-    "auto",
-    "copilot",
-    "copilot-agent",
-    "copilot-sdk",
-    "copilot-cli",
-    "lm-studio",
-  ];
+  const settingsProviders = ["auto", "copilot-agent", "lm-studio"];
   for (const providerId of settingsProviders) {
     if (!chromeSettingsSource.includes(`provider: "${providerId}"`)) {
       failures.push(`Settings.tsx must expose provider ${providerId}`);
     }
   }
 
-  const textOrder = 'return ["vscode-lm", "copilot-sdk", "copilot-cli"]';
-  const agentOrder = 'return ["copilot-sdk", "vscode-lm", "copilot-cli"]';
+  const textOrder = 'return ["vscode-lm", "copilot-cli"]';
+  const agentOrder = textOrder;
   for (const [fileName, source] of [
     ["chrome auto-provider.ts", chromeAutoProviderSource],
     ["vscode llm-router.ts", vscodeLlmRouterSource],
@@ -176,6 +169,15 @@ async function main() {
     if (!source.includes(agentOrder)) {
       failures.push(`${fileName} must keep Auto agent order ${agentOrder}`);
     }
+  }
+
+  if (
+    !vscodeLlmRouterSource.includes("userSelectable: false") ||
+    !chromeSettingsSource.includes("SDK and CLI are shown in bridge status")
+  ) {
+    failures.push(
+      "SDK/CLI must stay out of normal provider selection and remain diagnostics/fallback routes",
+    );
   }
 
   if (failures.length > 0) {

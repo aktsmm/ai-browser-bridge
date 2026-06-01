@@ -34,7 +34,22 @@ function isProviderCapability(
     value.name.trim().length > 0 &&
     typeof value.status === "string" &&
     PROVIDER_STATUSES.has(value.status as BridgeProviderCapability["status"]) &&
-    (value.detail === undefined || typeof value.detail === "string")
+    (value.detail === undefined || typeof value.detail === "string") &&
+    (value.reason === undefined || typeof value.reason === "string") &&
+    (value.supportsChat === undefined ||
+      typeof value.supportsChat === "boolean") &&
+    (value.supportsAgentLoop === undefined ||
+      typeof value.supportsAgentLoop === "boolean") &&
+    (value.supportsBrowserActions === undefined ||
+      typeof value.supportsBrowserActions === "boolean") &&
+    (value.supportsModelList === undefined ||
+      typeof value.supportsModelList === "boolean") &&
+    (value.supportsVision === undefined ||
+      typeof value.supportsVision === "boolean") &&
+    (value.isExperimental === undefined ||
+      typeof value.isExperimental === "boolean") &&
+    (value.userSelectable === undefined ||
+      typeof value.userSelectable === "boolean")
   );
 }
 

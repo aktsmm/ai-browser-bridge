@@ -8,21 +8,15 @@ import {
 
 describe("Auto provider helpers", () => {
   it("uses VS Code LM first for text mode", () => {
-    expect(getAutoProviderOrder("text")).toEqual([
-      "vscode-lm",
-      "copilot-sdk",
-      "copilot-cli",
-    ]);
+    expect(getAutoProviderOrder("text")).toEqual(["vscode-lm", "copilot-cli"]);
   });
 
-  it("uses Copilot SDK first for browser-agent modes", () => {
+  it("uses VS Code LM first for browser-agent modes", () => {
     expect(getAutoProviderOrder("hybrid")).toEqual([
-      "copilot-sdk",
       "vscode-lm",
       "copilot-cli",
     ]);
     expect(getAutoProviderOrder("screenshot")).toEqual([
-      "copilot-sdk",
       "vscode-lm",
       "copilot-cli",
     ]);
@@ -30,22 +24,21 @@ describe("Auto provider helpers", () => {
 
   it("renders compact provider labels and capability statuses", () => {
     expect(getAutoProviderLabel("vscode-lm")).toBe("VS Code LM");
-    expect(getAutoProviderLabel("copilot-sdk")).toBe("Copilot SDK");
     expect(getAutoProviderLabel("copilot-cli")).toBe("Copilot CLI");
     expect(
       getCapabilityStatus(
         {
           version: "test",
-          recommended: { chat: "vscode-lm", agent: "copilot-sdk" },
+          recommended: { chat: "vscode-lm", agent: "vscode-lm" },
           providers: [
             {
-              id: "copilot-sdk",
-              name: "GitHub Copilot SDK",
+              id: "copilot-cli",
+              name: "GitHub Copilot CLI",
               status: "available",
             },
           ],
         },
-        "copilot-sdk",
+        "copilot-cli",
       ),
     ).toBe("available");
   });

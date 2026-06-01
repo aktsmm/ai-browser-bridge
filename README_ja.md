@@ -66,11 +66,12 @@
 
 サイドパネルの設定ボタンから以下を設定可能:
 
-- **プロバイダー**: Auto / GitHub Copilot (Chat) / GitHub Copilot (Agent) / GitHub Copilot SDK (Agent) / GitHub Copilot CLI / LM Studio
-  - Auto は通常チャットでは VS Code Language Model API → GitHub Copilot SDK → GitHub Copilot CLI、ブラウザ操作を伴う Agent 系では GitHub Copilot SDK → VS Code Language Model API → GitHub Copilot CLI の順に試します
+- **プロバイダー**: Auto / GitHub Copilot via VS Code / LM Studio
+  - Auto は VS Code bridge 利用時に VS Code Language Model API を優先します。GitHub Copilot CLI は最後の回答 fallback としてのみ使います
+  - GitHub Copilot SDK / CLI は通常の provider 選択ではなく、Bridge 状態の診断または advanced fallback として表示します
   - 設定画面の **Auto 経路** で、現在の動作モードに応じた provider 順序と状態を確認できます
 - **Bridge 状態**: local bridge version と各 provider（VS Code LM / Copilot SDK / Copilot CLI / LM Studio）の利用状態を確認できます
-- **モデル選択**: claude-sonnet, gpt-4o など
+- **モデル選択**: bridge から実際に返った user-visible な Copilot モデルだけを表示します。live list が取得できない時は固定 fallback model を選択可能にしません
 - **ブラウザ操作**: サイドパネルからの自動ブラウザ操作を許可/無効化できます
 - **ファイル操作**: bridge 経由の生成ファイル保存を許可/無効化できます
 - **動作モード**: テキスト / スクリーンショット / ハイブリッド
@@ -86,7 +87,7 @@
 - **D&D 添付 (v1)**: text ファイルと画像をチャット面または入力欄へそのままドロップして添付できます
 - **PDF fallback**: PDF は添付コンテキストとして受け付けますが、v1 では本文抽出を行いません
 
-VS Code とは接続できているのにモデル一覧の取得に失敗した場合でも、設定パネルに警告を表示したうえでフォールバックモデルを継続表示するため、単なる未接続状態と区別できます。
+VS Code とは接続できているのにモデル一覧の取得に失敗した場合は、設定パネルに警告を表示し、更新が成功するまで Copilot モデル選択を無効化します。要約/翻訳などでページ本文を取得できない場合は、LLM へ送る前にサイドパネルで停止し、再読み込み・対象URL確認・モード変更・本文貼り付けを促します。
 
 ### Evaluate 許可境界の確認手順
 
@@ -154,7 +155,7 @@ CC BY-NC-SA 4.0 © [aktsmm](https://github.com/aktsmm)
 
 ### LLMへのデータ送信
 
-- **GitHub Copilot使用時**: ページ内容がGitHub/OpenAIのサーバーに送信されます
+- **GitHub Copilot使用時**: ページ内容はローカル bridge 経由で GitHub Copilot サービスへ送信されます
 - **ローカルLLM使用時**: すべてのデータはローカルで処理され、外部に送信されません
 
 ## 🔗 関連プロジェクト

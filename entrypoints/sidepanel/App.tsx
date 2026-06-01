@@ -54,6 +54,7 @@ import {
   buildPageContentUnavailableContext,
   isPageContentUnavailableContext,
 } from "./page-content-diagnostics";
+import { resolveSelectedCopilotModel } from "./copilot-model-selection";
 
 const DEFAULT_SETTINGS: LLMSettings = {
   provider: "auto",
@@ -83,44 +84,6 @@ const HIGH_RISK_ACTION_TYPES: ReadonlySet<BrowserAction["type"]> = new Set([
   "drag",
   "clickXY",
 ]);
-
-function resolveSelectedCopilotModel(
-  currentModel: string,
-  availableModels: ModelInfo[],
-): string {
-  const normalizedCurrentModel = currentModel.trim().toLowerCase();
-  if (!normalizedCurrentModel) {
-    return currentModel;
-  }
-
-  const copilotModels = availableModels.filter(
-    (model) => model.provider === "copilot",
-  );
-  if (copilotModels.length === 0) {
-    return currentModel;
-  }
-
-  const exactMatch = copilotModels.find(
-    (model) => model.id.toLowerCase() === normalizedCurrentModel,
-  );
-  if (exactMatch) {
-    return exactMatch.id;
-  }
-
-  const partialMatches = copilotModels.filter((model) => {
-    const normalizedId = model.id.toLowerCase();
-    return (
-      normalizedId.includes(normalizedCurrentModel) ||
-      normalizedCurrentModel.includes(normalizedId)
-    );
-  });
-
-  if (partialMatches.length === 1) {
-    return partialMatches[0].id;
-  }
-
-  return currentModel;
-}
 
 function isHighRiskAction(action: BrowserAction): boolean {
   return HIGH_RISK_ACTION_TYPES.has(action.type);
@@ -163,20 +126,14 @@ function usesCopilotModelProvider(provider: LLMSettings["provider"]): boolean {
   return (
     provider === "auto" ||
     provider === "copilot" ||
-    provider === "copilot-agent" ||
-    provider === "copilot-sdk"
+    provider === "copilot-agent"
   );
 }
 
 function supportsAutonomousLoopProvider(
   provider: LLMSettings["provider"],
 ): boolean {
-  return (
-    provider === "auto" ||
-    provider === "copilot-agent" ||
-    provider === "copilot-sdk" ||
-    provider === "copilot-cli"
-  );
+  return provider === "auto" || provider === "copilot-agent";
 }
 
 function isValidLlmSettings(value: unknown): value is LLMSettings {
@@ -207,6 +164,21 @@ function isValidLlmSettings(value: unknown): value is LLMSettings {
   }
 
   return true;
+}
+
+function normalizeLoadedLlmSettings(settings: LLMSettings): LLMSettings {
+  if (settings.provider === "copilot") {
+    return { ...settings, provider: "copilot-agent" };
+  }
+
+  if (
+    settings.provider === "copilot-sdk" ||
+    settings.provider === "copilot-cli"
+  ) {
+    return { ...settings, provider: "auto" };
+  }
+
+  return settings;
 }
 
 export default function App() {
@@ -299,7 +271,7 @@ export default function App() {
           migrationVersion < FULL_AUTO_MIGRATION_TARGET_VERSION;
 
         if (isValidLlmSettings(result.llmSettings)) {
-          setSettings(result.llmSettings);
+          setSettings(normalizeLoadedLlmSettings(result.llmSettings));
         }
         if (shouldForceFullAutoMigration) {
           setBrowserActionsEnabled(true);
@@ -1337,6 +1309,7 @@ export default function App() {
             content: t("pageContentUnavailableNotice", language),
           },
         ]);
+        return;
       }
 
       // Send to VS Code extension

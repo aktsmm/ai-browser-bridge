@@ -43,6 +43,14 @@ export interface BridgeProviderCapability {
   name: string;
   status: "available" | "unavailable" | "unknown";
   detail?: string;
+  reason?: string;
+  supportsChat?: boolean;
+  supportsAgentLoop?: boolean;
+  supportsBrowserActions?: boolean;
+  supportsModelList?: boolean;
+  supportsVision?: boolean;
+  isExperimental?: boolean;
+  userSelectable?: boolean;
   models?: ModelInfo[];
 }
 

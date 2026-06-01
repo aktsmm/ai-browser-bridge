@@ -66,11 +66,12 @@ Available now: [Install from Chrome Web Store](https://chromewebstore.google.com
 
 Configure from the side panel settings button:
 
-- **Provider**: Auto / GitHub Copilot (Chat) / GitHub Copilot (Agent) / GitHub Copilot SDK (Agent) / GitHub Copilot CLI / LM Studio
-  - Auto tries VS Code Language Model API → GitHub Copilot SDK → GitHub Copilot CLI for normal chat, and GitHub Copilot SDK → VS Code Language Model API → GitHub Copilot CLI for browser-agent work
+- **Provider**: Auto / GitHub Copilot via VS Code / LM Studio
+  - Auto prioritizes the VS Code Language Model API when the VS Code bridge is available. GitHub Copilot CLI is kept only as the last answer fallback.
+  - GitHub Copilot SDK / CLI are shown in Bridge Status as diagnostic or advanced fallback routes, not as normal provider choices.
   - The **Auto route** section in Settings shows the provider order and status for the current operation mode
 - **Bridge Status**: Shows the local bridge version and provider availability for VS Code LM, Copilot SDK, Copilot CLI, and LM Studio
-- **Model Selection**: claude-sonnet, gpt-4o, etc.
+- **Model Selection**: Shows only live user-visible Copilot models returned by the bridge. Static fallback models are not selectable when the live list is unavailable.
 - **Browser Actions**: Allow or block automatic browser control from the side panel
 - **File Operations**: Allow or block generated file saves through the bridge
 - **Operation Mode**: Text / Screenshot / Hybrid
@@ -86,7 +87,7 @@ Configure from the side panel settings button:
 - **Drag & drop attachments (v1)**: Attach text files and images by dropping them onto the chat area or input area
 - **PDF fallback**: PDF files are accepted as attachment context, but text extraction is intentionally skipped in v1
 
-If the extension is connected to VS Code but the model list cannot be loaded, fallback models remain visible and the settings panel shows a warning so you can retry refresh instead of mistaking it for a disconnected state.
+If the extension is connected to VS Code but the model list cannot be loaded, the settings panel shows a warning and disables Copilot model selection until refresh succeeds. If page text extraction fails for summarization or translation, the side panel stops before calling the LLM and asks you to reload, confirm the target URL, switch mode, or paste the text.
 
 ## Development
 
@@ -147,7 +148,7 @@ The extension no longer requests broad static site access. It reads the current 
 
 ### LLM Data Transmission
 
-- **GitHub Copilot**: Page content is sent to GitHub/OpenAI servers
+- **GitHub Copilot**: Page content is sent to the GitHub Copilot service through the local bridge
 - **Local LLM**: All data is processed locally, nothing sent externally
 
 ## Related Projects

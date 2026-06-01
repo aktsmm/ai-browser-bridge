@@ -3,11 +3,8 @@ import { buildDisplayedCopilotModels } from "./copilot-models";
 import type { ModelInfo } from "./types";
 
 describe("buildDisplayedCopilotModels", () => {
-  it("keeps the selected model visible when falling back", () => {
-    expect(buildDisplayedCopilotModels([], "o3-mini")[0]).toEqual({
-      value: "o3-mini",
-      label: "o3-mini",
-    });
+  it("does not show fallback models without a live Copilot model list", () => {
+    expect(buildDisplayedCopilotModels([], "o3-mini")).toEqual([]);
   });
 
   it("prefers live Copilot models when available", () => {
@@ -48,13 +45,14 @@ describe("buildDisplayedCopilotModels", () => {
     ]);
   });
 
-  it("does not re-add a hidden model just because it is selected", () => {
+  it("does not re-add a hidden or stale model just because it is selected", () => {
     expect(
       buildDisplayedCopilotModels([], "claude-opus-4.7-1m-internal"),
     ).not.toContainEqual({
       value: "claude-opus-4.7-1m-internal",
       label: "claude-opus-4.7-1m-internal",
     });
+    expect(buildDisplayedCopilotModels([], "gpt-4o")).toEqual([]);
   });
 
   it("keeps normal Copilot models and hides non-Copilot providers", () => {
@@ -69,7 +67,6 @@ describe("buildDisplayedCopilotModels", () => {
     ];
 
     expect(buildDisplayedCopilotModels(models, "claude-opus-4")).toEqual([
-      { value: "claude-opus-4", label: "claude-opus-4" },
       { value: "gpt-5.2", label: "GPT-5.2" },
     ]);
   });

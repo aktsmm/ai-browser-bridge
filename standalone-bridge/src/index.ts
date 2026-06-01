@@ -38,6 +38,14 @@ type Capability = {
   name: string;
   status: "available" | "unavailable" | "unknown";
   detail?: string;
+  reason?: string;
+  supportsChat?: boolean;
+  supportsAgentLoop?: boolean;
+  supportsBrowserActions?: boolean;
+  supportsModelList?: boolean;
+  supportsVision?: boolean;
+  isExperimental?: boolean;
+  userSelectable?: boolean;
 };
 type ValidationResult<T> =
   | { ok: true; value: T }
@@ -712,21 +720,7 @@ export class StandaloneBridgeServer {
     return json(res, 404, { error: "Not found" });
   }
   private async models() {
-    const models = [
-      {
-        provider: "copilot-sdk",
-        id: "sdk-agent",
-        name: "GitHub Copilot SDK (Agent)",
-      },
-      { provider: "lm-studio", id: "local", name: "LM Studio (Local)" },
-    ];
-    if (await isCliAvailable())
-      models.push({
-        provider: "copilot-cli",
-        id: "cli-fallback",
-        name: "GitHub Copilot CLI",
-      });
-    return models;
+    return [{ provider: "lm-studio", id: "local", name: "LM Studio (Local)" }];
   }
   private async capabilities(): Promise<Capability[]> {
     const sdk = await isSdkAvailable();
@@ -736,28 +730,53 @@ export class StandaloneBridgeServer {
         id: "vscode-lm",
         name: "VS Code Language Model API",
         status: "unavailable",
+        supportsChat: false,
+        supportsAgentLoop: false,
+        supportsBrowserActions: false,
+        supportsModelList: false,
+        supportsVision: false,
+        userSelectable: false,
         detail: "The standalone bridge does not host VS Code language models.",
       },
       {
         id: "copilot-sdk",
         name: "GitHub Copilot SDK",
         status: sdk ? "available" : "unavailable",
+        supportsChat: sdk,
+        supportsAgentLoop: false,
+        supportsBrowserActions: false,
+        supportsModelList: false,
+        supportsVision: false,
+        isExperimental: true,
+        userSelectable: false,
         detail: sdk
-          ? "Runtime authentication is checked on the first SDK request."
+          ? "Experimental standalone SDK route. Auto can use it, but it is not native VS Code Copilot Agent mode."
           : "@github/copilot-sdk could not be loaded by the standalone bridge process.",
       },
       {
         id: "copilot-cli",
         name: "GitHub Copilot CLI",
         status: cli ? "available" : "unavailable",
+        supportsChat: cli,
+        supportsAgentLoop: false,
+        supportsBrowserActions: false,
+        supportsModelList: false,
+        supportsVision: false,
+        userSelectable: false,
         detail: cli
-          ? undefined
+          ? "CLI is available as a last-resort answer fallback only."
           : "Copilot CLI command was not available to the standalone bridge process.",
       },
       {
         id: "lm-studio",
         name: "LM Studio",
         status: "unknown",
+        supportsChat: true,
+        supportsAgentLoop: false,
+        supportsBrowserActions: false,
+        supportsModelList: false,
+        supportsVision: false,
+        userSelectable: true,
         detail: "Endpoint health depends on the side panel LM Studio settings.",
       },
     ];
@@ -1089,7 +1108,6 @@ export class StandaloneBridgeServer {
       return;
     }
     if (request.settings.provider === "copilot-cli") {
-      yield "[GitHub Copilot CLI]\n\n";
       yield await runCliPrompt(
         buildPrompt(
           system,
@@ -1102,7 +1120,6 @@ export class StandaloneBridgeServer {
       return;
     }
     try {
-      yield "[GitHub Copilot SDK]\n\n";
       yield await runSdkPrompt(
         buildPrompt(
           system,
@@ -1116,8 +1133,9 @@ export class StandaloneBridgeServer {
       );
     } catch (error) {
       if (request.settings.provider !== "auto") throw error;
-      yield `\n\n[Auto fallback: copilot-sdk unavailable]\n`;
-      yield "[GitHub Copilot CLI]\n\n";
+      console.warn(
+        `Auto provider copilot-sdk unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      );
       yield await runCliPrompt(
         buildPrompt(
           system,

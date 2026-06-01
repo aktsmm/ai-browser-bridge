@@ -1,6 +1,13 @@
-import { describe, expect, it } from "vitest";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it, vi } from "vitest";
 
-import { getQuickActions, markdownSanitizeSchema } from "./Chat";
+import {
+  Chat,
+  getQuickActions,
+  isAssistantAlertMessage,
+  markdownSanitizeSchema,
+} from "./Chat";
 import { getDownloadShowId } from "../download-id";
 
 describe("getQuickActions", () => {
@@ -36,5 +43,43 @@ describe("getQuickActions", () => {
     expect(getDownloadShowId("download-show:1?x=2")).toBeNull();
     expect(getDownloadShowId("download-show:10000001")).toBeNull();
     expect(getDownloadShowId("https://example.com")).toBeNull();
+  });
+
+  it("marks warning assistant messages as alerts", () => {
+    expect(
+      isAssistantAlertMessage({
+        role: "assistant",
+        content: "⚠️ The page text could not be extracted.",
+      }),
+    ).toBe(true);
+    expect(
+      isAssistantAlertMessage({ role: "assistant", content: "Normal reply" }),
+    ).toBe(false);
+  });
+
+  it("renders warning messages and controls with accessible names", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(Chat, {
+        messages: [
+          {
+            role: "assistant",
+            content: "⚠️ The page text could not be extracted.",
+          },
+        ],
+        isLoading: false,
+        onSendMessage: vi.fn(),
+        onClearMessages: vi.fn(),
+        onStopGeneration: vi.fn(),
+        language: "en",
+        onSaveMarkdown: vi.fn(),
+        onSaveBlogDraft: vi.fn(),
+      }),
+    );
+
+    expect(html).toContain('role="alert"');
+    expect(html).toContain('aria-live="polite"');
+    expect(html).toContain('aria-label="Attach"');
+    expect(html).toContain('aria-label="Send"');
+    expect(html).toContain('title="Enter message..."');
   });
 });

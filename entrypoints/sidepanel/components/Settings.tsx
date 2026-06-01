@@ -58,12 +58,7 @@ const MAX_AGENT_LOOPS = 1000;
 const DEFAULT_AGENT_LOOPS = 500;
 
 function supportsAgentControls(provider: LLMSettings["provider"]): boolean {
-  return (
-    provider === "auto" ||
-    provider === "copilot-agent" ||
-    provider === "copilot-sdk" ||
-    provider === "copilot-cli"
-  );
+  return provider === "auto" || provider === "copilot-agent";
 }
 
 function normalizeAgentLoops(raw: string): number {
@@ -72,6 +67,13 @@ function normalizeAgentLoops(raw: string): number {
     return DEFAULT_AGENT_LOOPS;
   }
   return Math.min(MAX_AGENT_LOOPS, Math.max(MIN_AGENT_LOOPS, parsed));
+}
+
+function findBridgeProvider(
+  capabilities: BridgeCapabilities | null,
+  providerId: BridgeCapabilities["providers"][number]["id"],
+): BridgeCapabilities["providers"][number] | undefined {
+  return capabilities?.providers.find((provider) => provider.id === providerId);
 }
 
 export function getBridgeProviderStatusLabel(
@@ -133,11 +135,30 @@ export function Settings({
     availableModels,
     settings.copilot.model,
   );
+  const hasLiveCopilotModels = displayModels.length > 0;
+  const selectedModelIsLive = displayModels.some(
+    (model) => model.value === settings.copilot.model,
+  );
   const usesCopilotModel =
     settings.provider === "auto" ||
     settings.provider === "copilot" ||
-    settings.provider === "copilot-agent" ||
-    settings.provider === "copilot-sdk";
+    settings.provider === "copilot-agent";
+  const vscodeLmCapability = findBridgeProvider(
+    bridgeCapabilities,
+    "vscode-lm",
+  );
+  const vscodeLmUnavailable =
+    bridgeCapabilities !== null && vscodeLmCapability?.status !== "available";
+  const modelHelpId = "copilot-model-help";
+  const evaluateHintId = "evaluate-action-hint";
+  const modelHelpText =
+    !isConnected && availableModels.length === 0
+      ? t("modelNotConnected", language)
+      : isConnected && modelFetchFailed && availableModels.length === 0
+        ? t("modelFetchFailed", language)
+        : !hasLiveCopilotModels
+          ? t("modelUnavailableOption", language)
+          : "";
 
   const [serverPortInput, setServerPortInput] = React.useState(
     String(serverPort),
@@ -167,10 +188,10 @@ export function Settings({
       </div>
 
       {/* Provider Selection */}
-      <div className="mb-4">
-        <label className="block text-sm font-medium text-gray-700 mb-2">
+      <fieldset className="mb-4">
+        <legend className="block text-sm font-medium text-gray-700 mb-2">
           {t("provider", language)}
-        </label>
+        </legend>
         <div className="flex flex-col gap-2">
           <label className="flex items-center gap-2 cursor-pointer">
             <input
@@ -193,70 +214,25 @@ export function Settings({
               </p>
             </div>
           </label>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="radio"
-              name="provider"
-              checked={settings.provider === "copilot"}
-              onChange={() =>
-                onSettingsChange({ ...settings, provider: "copilot" })
-              }
-              className="text-blue-600"
-            />
-            <span>GitHub Copilot (Chat)</span>
-          </label>
-          <label className="flex items-center gap-2 cursor-pointer">
+          <label
+            className={`flex items-center gap-2 ${vscodeLmUnavailable ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}
+          >
             <input
               type="radio"
               name="provider"
               checked={settings.provider === "copilot-agent"}
+              disabled={vscodeLmUnavailable}
               onChange={() =>
                 onSettingsChange({ ...settings, provider: "copilot-agent" })
               }
               className="text-blue-600"
             />
             <div>
-              <span>GitHub Copilot (Agent)</span>
-              <p className="text-xs text-gray-500">
-                {t("copilotAgentDesc", language)}
-              </p>
-            </div>
-          </label>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="radio"
-              name="provider"
-              checked={settings.provider === "copilot-sdk"}
-              onChange={() =>
-                onSettingsChange({ ...settings, provider: "copilot-sdk" })
-              }
-              className="text-blue-600"
-            />
-            <div>
-              <span>GitHub Copilot SDK (Agent)</span>
+              <span>GitHub Copilot via VS Code</span>
               <p className="text-xs text-gray-500">
                 {language === "ja"
-                  ? "Public Preview の SDK 経路です。ツール権限は既定でブロックします。"
-                  : "Public Preview SDK route. Tool permissions are blocked by default."}
-              </p>
-            </div>
-          </label>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="radio"
-              name="provider"
-              checked={settings.provider === "copilot-cli"}
-              onChange={() =>
-                onSettingsChange({ ...settings, provider: "copilot-cli" })
-              }
-              className="text-blue-600"
-            />
-            <div>
-              <span>GitHub Copilot CLI</span>
-              <p className="text-xs text-gray-500">
-                {language === "ja"
-                  ? "Copilot CLI prompt 経路を直接使用します。"
-                  : "Uses the Copilot CLI prompt route directly."}
+                  ? "動作モードに応じて VS Code LM の Chat / Agent 経路を使います。"
+                  : "Uses the VS Code LM chat or agent route based on the operation mode."}
               </p>
             </div>
           </label>
@@ -275,10 +251,10 @@ export function Settings({
         </div>
         <p className="mt-2 text-xs text-gray-500">
           {language === "ja"
-            ? "現在の provider はローカル bridge（VS Code 拡張または standalone companion）経由で動作します。SDK / CLI を使う場合も、Chrome 拡張単体ではなくローカル bridge が必要です。"
-            : "All current providers run through a local bridge: either the VS Code extension or the standalone companion. Choosing SDK or CLI still requires a local bridge."}
+            ? "通常は Auto を使ってください。SDK / CLI は bridge 状態の診断と fallback 用に表示され、通常の provider としては選択しません。"
+            : "Use Auto for normal work. SDK and CLI are shown in bridge status as diagnostic/fallback routes, not primary provider choices."}
         </p>
-      </div>
+      </fieldset>
 
       {settings.provider === "auto" && (
         <div className="mb-4 rounded border border-blue-100 bg-blue-50 p-3">
@@ -287,12 +263,8 @@ export function Settings({
           </div>
           <p className="mt-1 text-xs text-blue-800">
             {language === "ja"
-              ? operationMode === "text"
-                ? "テキストモードでは軽量な VS Code LM を先に試します。"
-                : "ブラウザ操作モードでは Copilot SDK を先に試します。"
-              : operationMode === "text"
-                ? "Text mode tries the lightweight VS Code LM path first."
-                : "Browser-agent modes try the Copilot SDK path first."}
+              ? "Auto は VS Code LM を優先し、CLI は最後の回答 fallback としてのみ使います。"
+              : "Auto prioritizes VS Code LM. CLI is used only as the last answer fallback."}
           </p>
           <ol className="mt-2 flex flex-wrap gap-2 text-xs">
             {autoProviderOrder.map((providerId, index) => {
@@ -373,6 +345,18 @@ export function Settings({
                       {provider.detail}
                     </div>
                   )}
+                  {(provider.isExperimental ||
+                    provider.userSelectable === false) && (
+                    <div className="ml-3 text-gray-500 break-words">
+                      {provider.isExperimental
+                        ? language === "ja"
+                          ? "Experimental / advanced fallback"
+                          : "Experimental / advanced fallback"
+                        : language === "ja"
+                          ? "通常の provider 選択には表示しません"
+                          : "Hidden from normal provider selection"}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -395,7 +379,9 @@ export function Settings({
             </button>
           </div>
           <select
-            value={settings.copilot.model}
+            value={selectedModelIsLive ? settings.copilot.model : ""}
+            disabled={!hasLiveCopilotModels}
+            aria-describedby={modelHelpText ? modelHelpId : undefined}
             onChange={(e) =>
               onSettingsChange({
                 ...settings,
@@ -408,20 +394,23 @@ export function Settings({
             className="w-full p-2 border rounded bg-white"
             aria-label={t("modelSelectAria", language)}
           >
+            {!selectedModelIsLive && (
+              <option value="" disabled>
+                {t("modelUnavailableOption", language)}
+              </option>
+            )}
             {displayModels.map((model) => (
               <option key={model.value} value={model.value}>
                 {model.label}
               </option>
             ))}
           </select>
-          {!isConnected && availableModels.length === 0 && (
-            <p className="text-xs text-gray-500 mt-1">
-              {t("modelNotConnected", language)}
-            </p>
-          )}
-          {isConnected && modelFetchFailed && availableModels.length === 0 && (
-            <p className="text-xs text-amber-600 mt-1">
-              {t("modelFetchFailed", language)}
+          {modelHelpText && (
+            <p
+              id={modelHelpId}
+              className={`text-xs mt-1 ${modelFetchFailed ? "text-amber-600" : "text-gray-500"}`}
+            >
+              {modelHelpText}
             </p>
           )}
         </div>
@@ -621,7 +610,7 @@ export function Settings({
               {t("allowEvaluateActionDesc", language)}
             </p>
             {isEvaluateActionDisabled && (
-              <p className="text-xs text-gray-500 mt-1">
+              <p id={evaluateHintId} className="text-xs text-gray-500 mt-1">
                 {t("allowEvaluateActionDisabledHint", language)}
               </p>
             )}
@@ -631,6 +620,9 @@ export function Settings({
             checked={allowEvaluateAction}
             onChange={(e) => onAllowEvaluateActionChange(e.target.checked)}
             disabled={isEvaluateActionDisabled}
+            aria-describedby={
+              isEvaluateActionDisabled ? evaluateHintId : undefined
+            }
             className="w-5 h-5 text-blue-600 rounded disabled:opacity-50 disabled:cursor-not-allowed"
           />
         </label>

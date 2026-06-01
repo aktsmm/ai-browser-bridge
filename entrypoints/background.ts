@@ -1,6 +1,53 @@
 // Background Script - Service Worker
 // サイドパネルの開閉制御、コンテキストメニュー
 import { isValidDownloadId } from "./sidepanel/download-id";
+import type { PendingAction } from "./sidepanel/pending-action";
+
+type ContextMenuDeps = {
+  setPendingAction: (pendingAction: PendingAction) => Promise<void>;
+  openSidePanel: (windowId: number) => Promise<void>;
+};
+
+export function buildPendingActionFromContextMenu(
+  info: Pick<chrome.contextMenus.OnClickData, "menuItemId" | "selectionText">,
+  tab?: Pick<chrome.tabs.Tab, "id" | "url" | "title">,
+): PendingAction | null {
+  if (info.menuItemId === "askAboutSelection" && info.selectionText) {
+    return {
+      type: "question",
+      text: info.selectionText,
+      tabId: tab?.id,
+      url: tab?.url,
+      title: tab?.title,
+    };
+  }
+
+  if (info.menuItemId === "summarizePage") {
+    return {
+      type: "summarize",
+      tabId: tab?.id,
+      url: tab?.url,
+      title: tab?.title,
+    };
+  }
+
+  return null;
+}
+
+export async function handleContextMenuClick(
+  info: chrome.contextMenus.OnClickData,
+  tab: chrome.tabs.Tab | undefined,
+  deps: ContextMenuDeps,
+): Promise<void> {
+  if (typeof tab?.windowId !== "number") return;
+
+  const pendingAction = buildPendingActionFromContextMenu(info, tab);
+  if (!pendingAction) return;
+
+  const storePromise = deps.setPendingAction(pendingAction);
+  const openPromise = deps.openSidePanel(tab.windowId);
+  await Promise.all([storePromise, openPromise]);
+}
 
 export default defineBackground({
   type: "module",
@@ -66,30 +113,10 @@ export default defineBackground({
     // コンテキストメニュークリック
     browser.contextMenus.onClicked.addListener(
       async (info: chrome.contextMenus.OnClickData, tab?: chrome.tabs.Tab) => {
-        if (!tab?.windowId) return;
-
-        // 選択テキストがある場合は送信
-        if (info.menuItemId === "askAboutSelection" && info.selectionText) {
-          // storage経由でサイドパネルに渡す
-          await setPendingAction({
-            type: "question",
-            text: info.selectionText,
-            tabId: tab.id,
-            url: tab.url,
-            title: tab.title,
-          });
-        }
-
-        if (info.menuItemId === "summarizePage") {
-          await setPendingAction({
-            type: "summarize",
-            tabId: tab.id,
-            url: tab.url,
-            title: tab.title,
-          });
-        }
-
-        await openSidePanel(tab.windowId);
+        await handleContextMenuClick(info, tab, {
+          setPendingAction,
+          openSidePanel,
+        });
       },
     );
 

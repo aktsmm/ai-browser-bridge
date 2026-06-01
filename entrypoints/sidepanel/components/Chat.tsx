@@ -33,6 +33,12 @@ export const markdownSanitizeSchema: RehypeSanitizeOptions = {
   },
 };
 
+export function isAssistantAlertMessage(message: ChatMessage): boolean {
+  return (
+    message.role === "assistant" && message.content.trim().startsWith("⚠️")
+  );
+}
+
 // Collapse tool execution logs into compact markdown blocks
 function collapseToolLogs(content: string): string {
   // Remove download markers (already processed by App.tsx)
@@ -342,6 +348,7 @@ export function Chat({
             onClick={handleClear}
             className="text-xs text-gray-500 hover:text-red-500 flex items-center gap-1"
             title={t("clear", language)}
+            aria-label={t("clear", language)}
           >
             {t("clear", language)}
           </button>
@@ -448,110 +455,115 @@ export function Chat({
           </div>
         )}
 
-        {messages.map((message, index) => (
-          <div
-            key={index}
-            className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
-          >
+        {messages.map((message, index) => {
+          const isAlertMessage = isAssistantAlertMessage(message);
+          return (
             <div
-              className={`max-w-[85%] p-3 rounded-lg relative group ${
-                message.role === "user"
-                  ? "bg-blue-600 text-white"
-                  : "bg-white border shadow-sm"
-              }`}
+              key={index}
+              className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
             >
-              {message.role === "assistant" && (
-                <button
-                  onClick={() => handleCopy(message.content, index)}
-                  className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity text-xs px-1.5 py-0.5 rounded bg-gray-100 hover:bg-gray-200 text-gray-600"
-                  title={t("copy", language)}
-                  aria-label={t("copy", language)}
-                >
-                  {copiedIndex === index ? "✓" : "📋"}
-                </button>
-              )}
               <div
-                className={`break-words ${message.role === "user" ? "whitespace-pre-wrap" : "markdown-body"}`}
+                role={isAlertMessage ? "alert" : undefined}
+                aria-live={isAlertMessage ? "polite" : undefined}
+                className={`max-w-[85%] p-3 rounded-lg relative group ${
+                  message.role === "user"
+                    ? "bg-blue-600 text-white"
+                    : "bg-white border shadow-sm"
+                }`}
               >
-                {message.role === "assistant" ? (
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
-                    rehypePlugins={[[rehypeSanitize, markdownSanitizeSchema]]}
-                    components={{
-                      a: ({ href, children, ...props }) => {
-                        const safeHref = href || "";
-                        if (safeHref.startsWith("download-show:")) {
+                {message.role === "assistant" && (
+                  <button
+                    onClick={() => handleCopy(message.content, index)}
+                    className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity text-xs px-1.5 py-0.5 rounded bg-gray-100 hover:bg-gray-200 text-gray-600"
+                    title={t("copy", language)}
+                    aria-label={t("copy", language)}
+                  >
+                    {copiedIndex === index ? "✓" : "📋"}
+                  </button>
+                )}
+                <div
+                  className={`break-words ${message.role === "user" ? "whitespace-pre-wrap" : "markdown-body"}`}
+                >
+                  {message.role === "assistant" ? (
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      rehypePlugins={[[rehypeSanitize, markdownSanitizeSchema]]}
+                      components={{
+                        a: ({ href, children, ...props }) => {
+                          const safeHref = href || "";
+                          if (safeHref.startsWith("download-show:")) {
+                            return (
+                              <a
+                                href={safeHref}
+                                {...props}
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  handleMarkdownLinkClick(safeHref);
+                                }}
+                              >
+                                {children}
+                              </a>
+                            );
+                          }
                           return (
                             <a
                               href={safeHref}
+                              target="_blank"
+                              rel="noopener noreferrer"
                               {...props}
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                handleMarkdownLinkClick(safeHref);
-                              }}
                             >
                               {children}
                             </a>
                           );
-                        }
-                        return (
-                          <a
-                            href={safeHref}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            {...props}
-                          >
-                            {children}
-                          </a>
-                        );
-                      },
-                    }}
-                  >
-                    {collapseToolLogs(message.content)}
-                  </ReactMarkdown>
-                ) : (
-                  message.content
-                )}
-                {isLoading &&
-                  index === messages.length - 1 &&
-                  message.role === "assistant" && (
-                    <span className="inline-block w-2 h-4 ml-1 bg-gray-400 animate-pulse" />
+                        },
+                      }}
+                    >
+                      {collapseToolLogs(message.content)}
+                    </ReactMarkdown>
+                  ) : (
+                    message.content
                   )}
+                  {isLoading &&
+                    index === messages.length - 1 &&
+                    message.role === "assistant" && (
+                      <span className="inline-block w-2 h-4 ml-1 bg-gray-400 animate-pulse" />
+                    )}
 
-                {/* Quick actions at end of latest assistant message */}
-                {!isLoading &&
-                  message.role === "assistant" &&
-                  index === messages.length - 1 && (
-                    <div className="mt-3 pt-2 border-t border-gray-200 flex flex-wrap gap-2">
-                      {getQuickActions(language).map((action) => (
+                  {/* Quick actions at end of latest assistant message */}
+                  {!isLoading &&
+                    message.role === "assistant" &&
+                    index === messages.length - 1 && (
+                      <div className="mt-3 pt-2 border-t border-gray-200 flex flex-wrap gap-2">
+                        {getQuickActions(language).map((action) => (
+                          <button
+                            key={action.label}
+                            onClick={() => onSendMessage(action.prompt)}
+                            className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200 text-gray-700"
+                          >
+                            <span className="mr-1">{action.icon}</span>
+                            {action.label}
+                          </button>
+                        ))}
                         <button
-                          key={action.label}
-                          onClick={() => onSendMessage(action.prompt)}
-                          className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200 text-gray-700"
+                          onClick={onSaveMarkdown}
+                          className="text-xs px-2 py-1 rounded bg-blue-100 hover:bg-blue-200 text-blue-800"
                         >
-                          <span className="mr-1">{action.icon}</span>
-                          {action.label}
+                          💾 {t("saveMarkdownAction", language)}
                         </button>
-                      ))}
-                      <button
-                        onClick={onSaveMarkdown}
-                        className="text-xs px-2 py-1 rounded bg-blue-100 hover:bg-blue-200 text-blue-800"
-                      >
-                        💾 {t("saveMarkdownAction", language)}
-                      </button>
-                      <button
-                        onClick={onSaveBlogDraft}
-                        className="text-xs px-2 py-1 rounded bg-amber-100 hover:bg-amber-200 text-amber-800"
-                      >
-                        📝 {t("saveBlogDraftAction", language)}
-                      </button>
-                    </div>
-                  )}
+                        <button
+                          onClick={onSaveBlogDraft}
+                          className="text-xs px-2 py-1 rounded bg-amber-100 hover:bg-amber-200 text-amber-800"
+                        >
+                          📝 {t("saveBlogDraftAction", language)}
+                        </button>
+                      </div>
+                    )}
+                </div>
               </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
         <div ref={messagesEndRef} />
       </div>
 
@@ -584,6 +596,7 @@ export function Chat({
                       )
                     }
                     className="text-gray-400 hover:text-red-500"
+                    aria-label={`${t("removeAttachment", language)}: ${attachment.name}`}
                   >
                     ✕
                   </button>
@@ -605,6 +618,7 @@ export function Chat({
           ref={fileInputRef}
           type="file"
           multiple
+          aria-label={t("attachFiles", language)}
           onChange={(e) => {
             if (e.target.files) {
               void addFiles(e.target.files);
@@ -620,6 +634,7 @@ export function Chat({
             onClick={() => fileInputRef.current?.click()}
             className="px-3 py-2 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
             title={t("dropFilesHere", language)}
+            aria-label={t("attachFiles", language)}
           >
             {t("attachFiles", language)}
           </button>
@@ -638,6 +653,8 @@ export function Chat({
               type="button"
               onClick={onStopGeneration}
               className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600"
+              title={t("stop", language)}
+              aria-label={t("stop", language)}
             >
               {t("stop", language)}
             </button>
@@ -646,6 +663,12 @@ export function Chat({
               type="submit"
               disabled={!input.trim()}
               className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+              title={
+                !input.trim()
+                  ? t("inputPlaceholder", language)
+                  : t("send", language)
+              }
+              aria-label={t("send", language)}
             >
               {t("send", language)}
             </button>
