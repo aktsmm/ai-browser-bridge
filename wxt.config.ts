@@ -13,7 +13,7 @@ export default defineConfig({
     name: "GitHub Copilot Browser Bridge",
     description:
       "Analyze and interact with browser pages using GitHub Copilot or local LLMs.",
-    version: process.env.npm_package_version || "0.1.19",
+    version: process.env.npm_package_version || "0.1.20",
     icons: {
       16: "icon/16.png",
       48: "icon/48.png",

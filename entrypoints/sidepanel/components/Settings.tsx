@@ -14,6 +14,7 @@ import {
   normalizeServerPort,
 } from "../server-port";
 import { buildDisplayedCopilotModels } from "../copilot-models";
+import type { CustomPrompt } from "../pending-action";
 import {
   getAutoProviderLabel,
   getAutoProviderOrder,
@@ -51,6 +52,8 @@ interface SettingsProps {
   onSaveDestinationModeChange: (mode: SaveDestinationMode) => void;
   saveRelativePath: string;
   onSaveRelativePathChange: (path: string) => void;
+  customPrompts: CustomPrompt[];
+  onCustomPromptsChange: (prompts: CustomPrompt[]) => void;
 }
 
 const MIN_AGENT_LOOPS = 1;
@@ -130,6 +133,8 @@ export function Settings({
   onSaveDestinationModeChange,
   saveRelativePath,
   onSaveRelativePathChange,
+  customPrompts,
+  onCustomPromptsChange,
 }: SettingsProps) {
   const displayModels = buildDisplayedCopilotModels(
     availableModels,
@@ -535,6 +540,49 @@ export function Settings({
         <p className="text-xs text-gray-500 mt-1">
           {t("saveRelativePathDesc", language)}
         </p>
+      </div>
+
+      {/* Custom Prompts */}
+      <div className="mb-4">
+        <label className="block text-sm font-medium text-gray-700 mb-2">
+          {t("customPrompts", language)}
+        </label>
+        <p className="text-xs text-gray-500 mb-2">
+          {t("customPromptsDesc", language)}
+        </p>
+        {customPrompts.map((prompt, index) => (
+          <div
+            key={prompt.id}
+            className="mb-3 p-3 border rounded bg-gray-50"
+          >
+            <input
+              type="text"
+              value={prompt.name}
+              onChange={(e) => {
+                const next = customPrompts.map((item, i) =>
+                  i === index ? { ...item, name: e.target.value } : item,
+                );
+                onCustomPromptsChange(next);
+              }}
+              className="w-full p-2 border rounded mb-2"
+              placeholder={t("customPromptNamePlaceholder", language)}
+              aria-label={`${t("customPromptName", language)} ${index + 1}`}
+            />
+            <textarea
+              value={prompt.body}
+              onChange={(e) => {
+                const next = customPrompts.map((item, i) =>
+                  i === index ? { ...item, body: e.target.value } : item,
+                );
+                onCustomPromptsChange(next);
+              }}
+              className="w-full p-2 border rounded text-sm"
+              rows={3}
+              placeholder={t("customPromptBodyPlaceholder", language)}
+              aria-label={`${t("customPromptBody", language)} ${index + 1}`}
+            />
+          </div>
+        ))}
       </div>
 
       {/* Language Selection */}

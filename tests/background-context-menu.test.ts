@@ -39,6 +39,50 @@ describe("background context menu actions", () => {
     });
   });
 
+  it("builds post pending actions from the page context menu", () => {
+    expect(
+      backgroundModule.buildPendingActionFromContextMenu(
+        { menuItemId: "postAboutPage" },
+        { id: 789, url: "https://example.com/post", title: "Post" },
+      ),
+    ).toEqual({
+      type: "post",
+      tabId: 789,
+      url: "https://example.com/post",
+      title: "Post",
+    });
+  });
+
+  it("resolves custom prompt menu items to their stored body", () => {
+    const customPrompts = [
+      { id: "custom-1", name: "Deep dive", body: "  Dig deeper  " },
+    ];
+    expect(
+      backgroundModule.buildPendingActionFromContextMenu(
+        { menuItemId: `${backgroundModule.CUSTOM_PROMPT_MENU_PREFIX}custom-1` },
+        { id: 1, url: "https://example.com", title: "Example" },
+        customPrompts,
+      ),
+    ).toEqual({
+      type: "customPrompt",
+      text: "Dig deeper",
+      promptName: "Deep dive",
+      tabId: 1,
+      url: "https://example.com",
+      title: "Example",
+    });
+  });
+
+  it("ignores custom prompt menu items with empty body", () => {
+    expect(
+      backgroundModule.buildPendingActionFromContextMenu(
+        { menuItemId: `${backgroundModule.CUSTOM_PROMPT_MENU_PREFIX}custom-1` },
+        { id: 1 },
+        [{ id: "custom-1", name: "Empty", body: "   " }],
+      ),
+    ).toBeNull();
+  });
+
   it("opens the side panel without waiting for pending action storage", async () => {
     const events: string[] = [];
     let resolveStore: (() => void) | undefined;
@@ -56,7 +100,11 @@ describe("background context menu actions", () => {
     const result = backgroundModule.handleContextMenuClick(
       { menuItemId: "summarizePage" } as chrome.contextMenus.OnClickData,
       { id: 123, windowId: 999, url: "https://example.com" } as chrome.tabs.Tab,
-      { setPendingAction, openSidePanel },
+      {
+        setPendingAction,
+        openSidePanel,
+        loadCustomPrompts: vi.fn(async () => []),
+      },
     );
 
     expect(events).toEqual(["store-started", "open-called"]);
@@ -72,7 +120,11 @@ describe("background context menu actions", () => {
     await backgroundModule.handleContextMenuClick(
       { menuItemId: "unknown" } as chrome.contextMenus.OnClickData,
       { id: 123, windowId: 999 } as chrome.tabs.Tab,
-      { setPendingAction, openSidePanel },
+      {
+        setPendingAction,
+        openSidePanel,
+        loadCustomPrompts: vi.fn(async () => []),
+      },
     );
 
     expect(setPendingAction).not.toHaveBeenCalled();

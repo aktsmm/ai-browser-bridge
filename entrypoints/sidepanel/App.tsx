@@ -36,7 +36,11 @@ import { localizeFileOperationError } from "./file-operation-error";
 import { fetchModelsWithRetry } from "./model-fetch";
 import { readUtf8Stream } from "./stream-reader";
 import {
+  CUSTOM_PROMPTS_STORAGE_KEY,
+  type CustomPrompt,
+  DEFAULT_CUSTOM_PROMPTS,
   getPendingActionTabId,
+  normalizeCustomPrompts,
   type PendingAction,
   toPendingPrompt,
 } from "./pending-action";
@@ -215,6 +219,9 @@ export default function App() {
   const [saveRelativePath, setSaveRelativePath] = useState(
     DEFAULT_SAVE_RELATIVE_PATH,
   );
+  const [customPrompts, setCustomPrompts] = useState<CustomPrompt[]>(() =>
+    DEFAULT_CUSTOM_PROMPTS.map((prompt) => ({ ...prompt })),
+  );
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const inFlightRequestRef = useRef(false);
@@ -241,6 +248,7 @@ export default function App() {
         "allowEvaluateAction",
         "saveDestinationMode",
         "saveRelativePath",
+        CUSTOM_PROMPTS_STORAGE_KEY,
         FULL_AUTO_MIGRATION_VERSION_KEY,
         LEGACY_FULL_AUTO_MIGRATION_KEY,
         "pendingAction",
@@ -257,6 +265,7 @@ export default function App() {
         allowEvaluateAction?: boolean;
         saveDestinationMode?: SaveDestinationMode;
         saveRelativePath?: string;
+        customPrompts?: unknown;
         fullAutoMigrationVersion?: number;
         fullAutoMigratedV1?: boolean;
         pendingAction?: PendingAction;
@@ -314,6 +323,10 @@ export default function App() {
           setSaveRelativePath(
             result.saveRelativePath || DEFAULT_SAVE_RELATIVE_PATH,
           );
+        }
+
+        if (result.customPrompts !== undefined) {
+          setCustomPrompts(normalizeCustomPrompts(result.customPrompts));
         }
 
         if (shouldForceFullAutoMigration) {
@@ -408,6 +421,7 @@ export default function App() {
       allowEvaluateAction,
       saveDestinationMode,
       saveRelativePath,
+      [CUSTOM_PROMPTS_STORAGE_KEY]: customPrompts,
     });
   }, [
     settings,
@@ -421,6 +435,7 @@ export default function App() {
     allowEvaluateAction,
     saveDestinationMode,
     saveRelativePath,
+    customPrompts,
   ]);
 
   useEffect(() => {
@@ -1995,6 +2010,8 @@ export default function App() {
           onSaveDestinationModeChange={setSaveDestinationMode}
           saveRelativePath={saveRelativePath}
           onSaveRelativePathChange={setSaveRelativePath}
+          customPrompts={customPrompts}
+          onCustomPromptsChange={setCustomPrompts}
         />
       )}
 
@@ -2009,6 +2026,7 @@ export default function App() {
         }}
         onStopGeneration={stopGeneration}
         language={language}
+        customPrompts={customPrompts}
         onSaveMarkdown={() => {
           void saveLatestAssistantMarkdown("summary");
         }}

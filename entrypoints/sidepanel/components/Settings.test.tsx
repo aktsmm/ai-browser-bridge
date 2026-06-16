@@ -62,6 +62,8 @@ function renderSettings(options?: {
       onSaveDestinationModeChange={noop}
       saveRelativePath="output/blog"
       onSaveRelativePathChange={noop}
+      customPrompts={[]}
+      onCustomPromptsChange={noop}
     />,
   );
 }

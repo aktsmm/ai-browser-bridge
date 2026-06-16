@@ -33,8 +33,37 @@ describe("getQuickActions", () => {
     );
   });
 
+  it("includes a post quick action with hashtags in both languages", () => {
+    const ja = getQuickActions("ja").find((action) => action.label === "ポスト");
+    expect(ja?.prompt).toContain("ハッシュタグ");
+
+    const en = getQuickActions("en").find((action) => action.label === "Post");
+    expect(en?.prompt).toContain("hashtags");
+  });
+
   it("keeps internal download-show links available for click handling", () => {
     expect(markdownSanitizeSchema.protocols?.href).toContain("download-show");
+  });
+
+  it("renders custom prompt buttons after an assistant reply", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(Chat, {
+        messages: [{ role: "assistant", content: "Here is the answer." }],
+        isLoading: false,
+        onSendMessage: vi.fn(),
+        onClearMessages: vi.fn(),
+        onStopGeneration: vi.fn(),
+        language: "en",
+        customPrompts: [
+          { id: "custom-1", name: "Deep dive", body: "Dig deeper" },
+          { id: "custom-2", name: "", body: "" },
+        ],
+        onSaveMarkdown: vi.fn(),
+        onSaveBlogDraft: vi.fn(),
+      }),
+    );
+
+    expect(html).toContain("Deep dive");
   });
 
   it("accepts only numeric internal download-show ids", () => {

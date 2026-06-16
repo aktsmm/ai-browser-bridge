@@ -1,16 +1,26 @@
 // Background Script - Service Worker
 // サイドパネルの開閉制御、コンテキストメニュー
 import { isValidDownloadId } from "./sidepanel/download-id";
-import type { PendingAction } from "./sidepanel/pending-action";
+import {
+  CUSTOM_PROMPTS_STORAGE_KEY,
+  DEFAULT_CUSTOM_PROMPTS,
+  normalizeCustomPrompts,
+} from "./sidepanel/pending-action";
+import type { CustomPrompt, PendingAction } from "./sidepanel/pending-action";
+
+/** カスタムプロンプトのコンテキストメニュー id 接頭辞。 */
+export const CUSTOM_PROMPT_MENU_PREFIX = "customPrompt:";
 
 type ContextMenuDeps = {
   setPendingAction: (pendingAction: PendingAction) => Promise<void>;
   openSidePanel: (windowId: number) => Promise<void>;
+  loadCustomPrompts: () => Promise<CustomPrompt[]>;
 };
 
 export function buildPendingActionFromContextMenu(
   info: Pick<chrome.contextMenus.OnClickData, "menuItemId" | "selectionText">,
   tab?: Pick<chrome.tabs.Tab, "id" | "url" | "title">,
+  customPrompts: CustomPrompt[] = [],
 ): PendingAction | null {
   if (info.menuItemId === "askAboutSelection" && info.selectionText) {
     return {
@@ -31,6 +41,33 @@ export function buildPendingActionFromContextMenu(
     };
   }
 
+  if (info.menuItemId === "postAboutPage") {
+    return {
+      type: "post",
+      tabId: tab?.id,
+      url: tab?.url,
+      title: tab?.title,
+    };
+  }
+
+  if (
+    typeof info.menuItemId === "string" &&
+    info.menuItemId.startsWith(CUSTOM_PROMPT_MENU_PREFIX)
+  ) {
+    const id = info.menuItemId.slice(CUSTOM_PROMPT_MENU_PREFIX.length);
+    const prompt = customPrompts.find((item) => item.id === id);
+    const body = prompt?.body.trim();
+    if (!body) return null;
+    return {
+      type: "customPrompt",
+      text: body,
+      promptName: prompt?.name,
+      tabId: tab?.id,
+      url: tab?.url,
+      title: tab?.title,
+    };
+  }
+
   return null;
 }
 
@@ -41,7 +78,16 @@ export async function handleContextMenuClick(
 ): Promise<void> {
   if (typeof tab?.windowId !== "number") return;
 
-  const pendingAction = buildPendingActionFromContextMenu(info, tab);
+  const isCustomPrompt =
+    typeof info.menuItemId === "string" &&
+    info.menuItemId.startsWith(CUSTOM_PROMPT_MENU_PREFIX);
+  const customPrompts = isCustomPrompt ? await deps.loadCustomPrompts() : [];
+
+  const pendingAction = buildPendingActionFromContextMenu(
+    info,
+    tab,
+    customPrompts,
+  );
   if (!pendingAction) return;
 
   const storePromise = deps.setPendingAction(pendingAction);
@@ -65,15 +111,7 @@ export default defineBackground({
     };
 
     const setPendingAction = async (
-      pendingAction:
-        | {
-            type: "question";
-            text: string;
-            tabId?: number;
-            url?: string;
-            title?: string;
-          }
-        | { type: "summarize"; tabId?: number; url?: string; title?: string },
+      pendingAction: PendingAction,
     ): Promise<void> => {
       try {
         await browser.storage.local.set({ pendingAction });
@@ -83,6 +121,58 @@ export default defineBackground({
           error,
         );
       }
+    };
+
+    const loadCustomPrompts = async (): Promise<CustomPrompt[]> => {
+      try {
+        const stored = await browser.storage.local.get(
+          CUSTOM_PROMPTS_STORAGE_KEY,
+        );
+        return normalizeCustomPrompts(stored[CUSTOM_PROMPTS_STORAGE_KEY]);
+      } catch (error) {
+        console.error(
+          "GitHub Copilot Browser Bridge: Failed to load custom prompts",
+          error,
+        );
+        return DEFAULT_CUSTOM_PROMPTS.map((prompt) => ({ ...prompt }));
+      }
+    };
+
+    // コンテキストメニューを（静的 + カスタムプロンプト）再構築する
+    const setupContextMenus = async (): Promise<void> => {
+      await new Promise<void>((resolve) => {
+        browser.contextMenus.removeAll(() => resolve());
+      });
+
+      browser.contextMenus.create({
+        id: "askAboutSelection",
+        title: "GitHub Copilot Browser Bridgeで質問",
+        contexts: ["selection"],
+      });
+
+      browser.contextMenus.create({
+        id: "summarizePage",
+        title: "このページを要約",
+        contexts: ["page"],
+      });
+
+      browser.contextMenus.create({
+        id: "postAboutPage",
+        title: "このページでポストを作成",
+        contexts: ["page"],
+      });
+
+      const customPrompts = await loadCustomPrompts();
+      customPrompts.forEach((prompt) => {
+        const title = prompt.name.trim();
+        const body = prompt.body.trim();
+        if (!title || !body) return;
+        browser.contextMenus.create({
+          id: `${CUSTOM_PROMPT_MENU_PREFIX}${prompt.id}`,
+          title,
+          contexts: ["page", "selection"],
+        });
+      });
     };
 
     // アクションクリックでサイドパネルを開く
@@ -97,17 +187,14 @@ export default defineBackground({
 
     // コンテキストメニュー作成
     browser.runtime.onInstalled.addListener(() => {
-      browser.contextMenus.create({
-        id: "askAboutSelection",
-        title: "GitHub Copilot Browser Bridgeで質問",
-        contexts: ["selection"],
-      });
+      void setupContextMenus();
+    });
 
-      browser.contextMenus.create({
-        id: "summarizePage",
-        title: "このページを要約",
-        contexts: ["page"],
-      });
+    // カスタムプロンプト変更時にメニューを再構築
+    browser.storage.onChanged.addListener((changes, areaName) => {
+      if (areaName === "local" && changes[CUSTOM_PROMPTS_STORAGE_KEY]) {
+        void setupContextMenus();
+      }
     });
 
     // コンテキストメニュークリック
@@ -116,6 +203,7 @@ export default defineBackground({
         await handleContextMenuClick(info, tab, {
           setPendingAction,
           openSidePanel,
+          loadCustomPrompts,
         });
       },
     );

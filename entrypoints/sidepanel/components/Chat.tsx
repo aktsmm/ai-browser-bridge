@@ -14,6 +14,8 @@ import {
   type ChatAttachment,
 } from "../attachments";
 import {
+  type CustomPrompt,
+  getPostPrompt,
   getSummarizeAndSavePrompt,
   getSummarizePrompt,
 } from "../pending-action";
@@ -89,6 +91,11 @@ export function getQuickActions(lang: Language): QuickAction[] {
           prompt:
             "直前の回答を、内容は変えずに読みやすいMarkdownへ整えてください。見出し、箇条書き、出典URLが分かる形にし、保存や新しいブラウザ操作やページ遷移はしないでください。",
         },
+        {
+          icon: "🐦",
+          label: "ポスト",
+          prompt: getPostPrompt("ja"),
+        },
       ]
     : [
         {
@@ -115,6 +122,11 @@ export function getQuickActions(lang: Language): QuickAction[] {
           prompt:
             "Polish the previous answer into readable Markdown without changing the substance. Add clear headings and bullets, and include the source URL when available. Do not save files. Do not navigate, click, or perform new browser actions.",
         },
+        {
+          icon: "🐦",
+          label: "Post",
+          prompt: getPostPrompt("en"),
+        },
       ];
 }
 
@@ -125,6 +137,7 @@ interface ChatProps {
   onClearMessages: () => void;
   onStopGeneration: () => void;
   language: Language;
+  customPrompts?: CustomPrompt[];
   onSaveMarkdown: () => void;
   onSaveBlogDraft: () => void;
 }
@@ -136,6 +149,7 @@ export function Chat({
   onClearMessages,
   onStopGeneration,
   language,
+  customPrompts = [],
   onSaveMarkdown,
   onSaveBlogDraft,
 }: ChatProps) {
@@ -545,6 +559,21 @@ export function Chat({
                             {action.label}
                           </button>
                         ))}
+                        {customPrompts
+                          .filter(
+                            (prompt) =>
+                              prompt.name.trim() && prompt.body.trim(),
+                          )
+                          .map((prompt) => (
+                            <button
+                              key={prompt.id}
+                              onClick={() => onSendMessage(prompt.body)}
+                              className="text-xs px-2 py-1 rounded bg-purple-100 hover:bg-purple-200 text-purple-800"
+                            >
+                              <span className="mr-1">✨</span>
+                              {prompt.name}
+                            </button>
+                          ))}
                         <button
                           onClick={onSaveMarkdown}
                           className="text-xs px-2 py-1 rounded bg-blue-100 hover:bg-blue-200 text-blue-800"
