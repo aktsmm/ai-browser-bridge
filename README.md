@@ -2,7 +2,7 @@
 
 [![Chrome Web Store](https://img.shields.io/badge/Chrome%20Web%20Store-live-brightgreen?logo=google-chrome)](https://chromewebstore.google.com/detail/copilot-browser-bridge/nggfpdadfepkbpjfnpcihagbnnfpeian)
 [![License CC BY-NC-SA 4.0](https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg)](LICENSE)
-[![GitHub](https://img.shields.io/github/stars/aktsmm/copilot-browser-bridge?style=social)](https://github.com/aktsmm/copilot-browser-bridge)
+[![GitHub](https://img.shields.io/github/stars/aktsmm/ai-browser-bridge?style=social)](https://github.com/aktsmm/ai-browser-bridge)
 
 Chrome extension to analyze, interact, and automate browser pages with LLM (GitHub Copilot / Local LLM)
 
@@ -36,7 +36,7 @@ Available now: [Install from Chrome Web Store](https://chromewebstore.google.com
 
 ## Requirements
 
-- **Required (always)**: A local bridge server: either [AI Browser Bridge for VS Code](https://github.com/aktsmm/copilot-browser-bridge-vscode) or the standalone companion in `standalone-bridge`
+- **Required (always)**: A local bridge server: either [AI Browser Bridge for VS Code](https://github.com/aktsmm/ai-browser-bridge-vscode) or the standalone companion in `standalone-bridge`
 - **LLM provider**: **GitHub Copilot subscription** (only when using Copilot provider) or **Local LLM** (LM Studio, etc.)
 
 > GitHub Copilot SDK and GitHub Copilot CLI providers require a local bridge process. Use the VS Code extension bridge or start the standalone companion; the Chrome Web Store extension alone cannot start local SDK or CLI processes.
@@ -154,7 +154,7 @@ The extension no longer requests broad static site access. It reads the current 
 
 ## Related Projects
 
-- [AI Browser Bridge for VS Code](https://github.com/aktsmm/copilot-browser-bridge-vscode) - VS Code bridge option
+- [AI Browser Bridge for VS Code](https://github.com/aktsmm/ai-browser-bridge-vscode) - VS Code bridge option
 - [Standalone companion bridge](standalone-bridge/README.md) - Node bridge option without the VS Code extension
 
 ## Author
