@@ -551,10 +551,7 @@ export function Settings({
           {t("customPromptsDesc", language)}
         </p>
         {customPrompts.map((prompt, index) => (
-          <div
-            key={prompt.id}
-            className="mb-3 p-3 border rounded bg-gray-50"
-          >
+          <div key={prompt.id} className="mb-3 p-3 border rounded bg-gray-50">
             <input
               type="text"
               value={prompt.name}

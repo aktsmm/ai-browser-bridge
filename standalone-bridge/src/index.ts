@@ -653,7 +653,7 @@ export class StandaloneBridgeServer {
       if (!server) return reject(new Error("Server initialization failed"));
       server.once("listening", () => {
         console.log(
-          `GitHub Copilot Browser Bridge standalone: listening on http://127.0.0.1:${this.port}`,
+          `AI Browser Bridge standalone: listening on http://127.0.0.1:${this.port}`,
         );
         resolve();
       });

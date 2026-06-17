@@ -34,7 +34,9 @@ describe("getQuickActions", () => {
   });
 
   it("includes a post quick action with hashtags in both languages", () => {
-    const ja = getQuickActions("ja").find((action) => action.label === "ポスト");
+    const ja = getQuickActions("ja").find(
+      (action) => action.label === "ポスト",
+    );
     expect(ja?.prompt).toContain("ハッシュタグ");
 
     const en = getQuickActions("en").find((action) => action.label === "Post");

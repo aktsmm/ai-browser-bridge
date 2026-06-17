@@ -1,4 +1,4 @@
-# GitHub Copilot Browser Bridge (Chrome Extension)
+# AI Browser Bridge (Chrome Extension)
 
 [![Chrome Web Store](https://img.shields.io/badge/Chrome%20Web%20Store-live-brightgreen?logo=google-chrome)](https://chromewebstore.google.com/detail/copilot-browser-bridge/nggfpdadfepkbpjfnpcihagbnnfpeian)
 [![License CC BY-NC-SA 4.0](https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg)](LICENSE)
@@ -36,7 +36,7 @@
 
 ## 📋 必要条件
 
-- **必須（常時）**: ローカル bridge server（[GitHub Copilot Browser Bridge for VS Code](https://github.com/aktsmm/copilot-browser-bridge-vscode) または `standalone-bridge` の standalone companion）
+- **必須（常時）**: ローカル bridge server（[AI Browser Bridge for VS Code](https://github.com/aktsmm/copilot-browser-bridge-vscode) または `standalone-bridge` の standalone companion）
 - **LLMプロバイダー**: **GitHub Copilot サブスクリプション**（Copilotプロバイダーを使う場合のみ）または **ローカルLLM**（LM Studio等）
 
 > GitHub Copilot SDK / GitHub Copilot CLI provider を使う場合は、VS Code bridge または standalone companion のローカル bridge プロセスが必要です。Chrome Web Store 版単体ではローカル SDK / CLI プロセスを起動できません。
@@ -161,7 +161,7 @@ CC BY-NC-SA 4.0 © [aktsmm](https://github.com/aktsmm)
 
 ## 🔗 関連プロジェクト
 
-- [GitHub Copilot Browser Bridge for VS Code](https://github.com/aktsmm/copilot-browser-bridge-vscode) - 必須のVS Code拡張機能
+- [AI Browser Bridge for VS Code](https://github.com/aktsmm/copilot-browser-bridge-vscode) - 必須のVS Code拡張機能
 
 ## 👤 Author
 

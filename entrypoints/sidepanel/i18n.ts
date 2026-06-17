@@ -3,7 +3,7 @@ export type Language = "ja" | "en";
 export const translations = {
   ja: {
     // Header
-    appTitle: "🤖 GitHub Copilot Browser Bridge",
+    appTitle: "🤖 AI Browser Bridge",
     reconnect: "再接続",
     settings: "設定",
 
@@ -128,7 +128,7 @@ export const translations = {
   },
   en: {
     // Header
-    appTitle: "🤖 GitHub Copilot Browser Bridge",
+    appTitle: "🤖 AI Browser Bridge",
     reconnect: "Reconnect",
     settings: "Settings",
 
@@ -192,7 +192,8 @@ export const translations = {
     customPromptName: "Name",
     customPromptBody: "Prompt content",
     customPromptNamePlaceholder: "e.g. Deep dive",
-    customPromptBodyPlaceholder: "Enter the instruction to send with this prompt",
+    customPromptBodyPlaceholder:
+      "Enter the instruction to send with this prompt",
     attachFiles: "Attach",
     removeAttachment: "Remove attachment",
     attachedFiles: "Attached files",

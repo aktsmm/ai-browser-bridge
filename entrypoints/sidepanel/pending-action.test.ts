@@ -82,15 +82,14 @@ describe("toPendingPrompt", () => {
 
   it("returns the trimmed body for a custom prompt action", () => {
     expect(
-      toPendingPrompt(
-        { type: "customPrompt", text: "  dig deeper  " },
-        "ja",
-      ),
+      toPendingPrompt({ type: "customPrompt", text: "  dig deeper  " }, "ja"),
     ).toBe("dig deeper");
   });
 
   it("returns null when custom prompt text is empty or non-string", () => {
-    expect(toPendingPrompt({ type: "customPrompt", text: "   " }, "ja")).toBeNull();
+    expect(
+      toPendingPrompt({ type: "customPrompt", text: "   " }, "ja"),
+    ).toBeNull();
     expect(toPendingPrompt({ type: "customPrompt" }, "ja")).toBeNull();
   });
 });

@@ -103,10 +103,7 @@ export default defineBackground({
       try {
         await browser.sidePanel.open({ windowId });
       } catch (error) {
-        console.error(
-          "GitHub Copilot Browser Bridge: Failed to open side panel",
-          error,
-        );
+        console.error("AI Browser Bridge: Failed to open side panel", error);
       }
     };
 
@@ -117,7 +114,7 @@ export default defineBackground({
         await browser.storage.local.set({ pendingAction });
       } catch (error) {
         console.error(
-          "GitHub Copilot Browser Bridge: Failed to store pending action",
+          "AI Browser Bridge: Failed to store pending action",
           error,
         );
       }
@@ -131,7 +128,7 @@ export default defineBackground({
         return normalizeCustomPrompts(stored[CUSTOM_PROMPTS_STORAGE_KEY]);
       } catch (error) {
         console.error(
-          "GitHub Copilot Browser Bridge: Failed to load custom prompts",
+          "AI Browser Bridge: Failed to load custom prompts",
           error,
         );
         return DEFAULT_CUSTOM_PROMPTS.map((prompt) => ({ ...prompt }));
@@ -146,7 +143,7 @@ export default defineBackground({
 
       browser.contextMenus.create({
         id: "askAboutSelection",
-        title: "GitHub Copilot Browser Bridgeで質問",
+        title: "AI Browser Bridgeで質問",
         contexts: ["selection"],
       });
 
@@ -180,7 +177,7 @@ export default defineBackground({
       .setPanelBehavior({ openPanelOnActionClick: true })
       .catch((error: unknown) => {
         console.error(
-          "GitHub Copilot Browser Bridge: Failed to set side panel behavior",
+          "AI Browser Bridge: Failed to set side panel behavior",
           error,
         );
       });
@@ -308,6 +305,6 @@ export default defineBackground({
       },
     );
 
-    console.log("GitHub Copilot Browser Bridge: Background script loaded");
+    console.log("AI Browser Bridge: Background script loaded");
   },
 });

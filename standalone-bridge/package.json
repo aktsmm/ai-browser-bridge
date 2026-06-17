@@ -1,6 +1,6 @@
 {
   "name": "copilot-browser-bridge-standalone",
-  "description": "Standalone localhost bridge for GitHub Copilot Browser Bridge",
+  "description": "Standalone localhost bridge for AI Browser Bridge",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -25,6 +25,3 @@
     "vitest": "^3.2.4"
   }
 }
-
-
-

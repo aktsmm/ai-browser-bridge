@@ -1,8 +1,8 @@
 {
   "name": "copilot-browser-bridge-chrome",
-  "description": "Chrome extension for GitHub Copilot Browser Bridge",
+  "description": "Chrome extension for AI Browser Bridge",
   "private": true,
-  "version": "0.1.20",
+  "version": "0.1.21",
   "type": "module",
   "scripts": {
     "dev": "wxt",

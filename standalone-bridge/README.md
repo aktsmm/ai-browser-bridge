@@ -1,4 +1,4 @@
-# GitHub Copilot Browser Bridge Standalone Companion
+# AI Browser Bridge Standalone Companion
 
 VS Code 拡張を起動しなくても `localhost` bridge を提供する companion app です。
 

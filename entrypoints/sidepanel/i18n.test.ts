@@ -1,14 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { translations } from "./i18n";
 
-describe("GitHub Copilot branding", () => {
-  it("uses GitHub Copilot wording in Japanese settings text", () => {
-    expect(translations.ja.appTitle).toContain("GitHub Copilot");
+describe("branding", () => {
+  it("uses the neutral app title in Japanese settings text", () => {
+    expect(translations.ja.appTitle).toContain("AI Browser Bridge");
+    expect(translations.ja.appTitle).not.toContain("GitHub Copilot");
+    // Functional reference to the GitHub Copilot model list is retained (nominative use).
     expect(translations.ja.modelFetchFailed).toContain("GitHub Copilot");
   });
 
-  it("uses GitHub Copilot wording in English settings text", () => {
-    expect(translations.en.appTitle).toContain("GitHub Copilot");
+  it("uses the neutral app title in English settings text", () => {
+    expect(translations.en.appTitle).toContain("AI Browser Bridge");
+    expect(translations.en.appTitle).not.toContain("GitHub Copilot");
+    // Functional reference to the GitHub Copilot model list is retained (nominative use).
     expect(translations.en.modelFetchFailed).toContain("GitHub Copilot");
   });
 });
