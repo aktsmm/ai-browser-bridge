@@ -25,3 +25,6 @@ Thumbs.db
 /.github/skills/
 /output_sessions/
 store-assets/screenshots/
+
+store-assets/evidence/
+store-assets/screenshot-1280x800-*.png
