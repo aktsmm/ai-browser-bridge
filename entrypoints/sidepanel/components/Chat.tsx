@@ -18,6 +18,7 @@ import {
   getPostPrompt,
   getSummarizeAndSavePrompt,
   getSummarizePrompt,
+  type PostLength,
 } from "../pending-action";
 import { getDownloadShowId } from "../download-id";
 
@@ -64,7 +65,11 @@ function collapseToolLogs(content: string): string {
   return cleaned;
 }
 
-export function getQuickActions(lang: Language): QuickAction[] {
+export function getQuickActions(
+  lang: Language,
+  postLength: PostLength = "short",
+): QuickAction[] {
+  const lenLabel = postLength === "short" ? "140" : "500";
   return lang === "ja"
     ? [
         {
@@ -93,8 +98,13 @@ export function getQuickActions(lang: Language): QuickAction[] {
         },
         {
           icon: "🐦",
-          label: "ポスト",
-          prompt: getPostPrompt("ja"),
+          label: `ポスト軽（${lenLabel}）`,
+          prompt: getPostPrompt("ja", "casual", postLength),
+        },
+        {
+          icon: "📝",
+          label: `ポスト硬（${lenLabel}）`,
+          prompt: getPostPrompt("ja", "formal", postLength),
         },
       ]
     : [
@@ -124,8 +134,13 @@ export function getQuickActions(lang: Language): QuickAction[] {
         },
         {
           icon: "🐦",
-          label: "Post",
-          prompt: getPostPrompt("en"),
+          label: `Post casual (${lenLabel})`,
+          prompt: getPostPrompt("en", "casual", postLength),
+        },
+        {
+          icon: "📝",
+          label: `Post formal (${lenLabel})`,
+          prompt: getPostPrompt("en", "formal", postLength),
         },
       ];
 }
@@ -155,6 +170,7 @@ export function Chat({
 }: ChatProps) {
   const [input, setInput] = useState("");
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+  const [postLength, setPostLength] = useState<PostLength>("short");
   const [pendingAttachments, setPendingAttachments] = useState<
     ChatAttachment[]
   >([]);
@@ -549,7 +565,29 @@ export function Chat({
                     message.role === "assistant" &&
                     index === messages.length - 1 && (
                       <div className="mt-3 pt-2 border-t border-gray-200 flex flex-wrap gap-2">
-                        {getQuickActions(language).map((action) => (
+                        <button
+                          onClick={() =>
+                            setPostLength((prev) =>
+                              prev === "short" ? "long" : "short",
+                            )
+                          }
+                          aria-pressed={postLength === "long"}
+                          aria-label={
+                            language === "ja"
+                              ? `ポストの長さ: 現在${postLength === "short" ? "140字" : "500字"}。切り替え`
+                              : `Post length: currently ${postLength === "short" ? "140" : "500"} chars. Toggle`
+                          }
+                          title={
+                            language === "ja"
+                              ? "ポストの長さを切り替え（140字 / 500字）"
+                              : "Toggle post length (140 / 500 chars)"
+                          }
+                          className="text-xs px-2 py-1 rounded bg-blue-100 hover:bg-blue-200 text-blue-800"
+                        >
+                          <span className="mr-1">🔁</span>
+                          {postLength === "short" ? "140" : "500"}
+                        </button>
+                        {getQuickActions(language, postLength).map((action) => (
                           <button
                             key={action.label}
                             onClick={() => onSendMessage(action.prompt)}

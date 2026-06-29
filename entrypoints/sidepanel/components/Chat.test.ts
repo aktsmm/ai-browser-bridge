@@ -35,12 +35,34 @@ describe("getQuickActions", () => {
 
   it("includes a post quick action with hashtags in both languages", () => {
     const ja = getQuickActions("ja").find(
-      (action) => action.label === "ポスト",
+      (action) => action.label === "ポスト軽（140）",
     );
     expect(ja?.prompt).toContain("ハッシュタグ");
 
-    const en = getQuickActions("en").find((action) => action.label === "Post");
+    const en = getQuickActions("en").find(
+      (action) => action.label === "Post casual (140)",
+    );
     expect(en?.prompt).toContain("hashtags");
+  });
+
+  it("reflects the post length parameter in labels and prompts", () => {
+    const jaShort = getQuickActions("ja", "short");
+    expect(
+      jaShort.find((a) => a.label === "ポスト軽（140）")?.prompt,
+    ).toContain("140字以内");
+    expect(
+      jaShort.find((a) => a.label === "ポスト硬（140）")?.prompt,
+    ).toContain("140字以内");
+    const jaLong = getQuickActions("ja", "long");
+    expect(jaLong.find((a) => a.label === "ポスト軽（500）")?.prompt).toContain(
+      "500字以内",
+    );
+    expect(jaLong.find((a) => a.label === "ポスト硬（500）")?.prompt).toContain(
+      "500字以内",
+    );
+    // 4種すべてが長さトグルで到達可能（casual/formal × short/long）
+    expect(jaShort.some((a) => a.label === "ポスト硬（140）")).toBe(true);
+    expect(jaLong.some((a) => a.label === "ポスト軽（500）")).toBe(true);
   });
 
   it("keeps internal download-show links available for click handling", () => {

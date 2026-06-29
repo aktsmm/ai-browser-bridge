@@ -4,6 +4,8 @@ import {
   getPendingActionTabId,
   getSummarizeAndSavePrompt,
   normalizeCustomPrompts,
+  pageContentInjectionGuard,
+  POST_URL_PLACEHOLDER,
   toPendingPrompt,
 } from "./pending-action";
 
@@ -80,6 +82,49 @@ describe("toPendingPrompt", () => {
     expect(en).toContain("Do not navigate");
   });
 
+  it("selects the short character budget for short posts", () => {
+    const ja = toPendingPrompt(
+      { type: "post", tone: "casual", length: "short" },
+      "ja",
+    );
+    expect(ja).toContain("140字以内");
+    expect(ja).not.toContain("500字以内");
+  });
+
+  it("selects the long character budget for long posts", () => {
+    const ja = toPendingPrompt(
+      { type: "post", tone: "formal", length: "long" },
+      "ja",
+    );
+    expect(ja).toContain("500字以内");
+    expect(ja).toContain("です・ます");
+  });
+
+  it("injects the action url verbatim into the post prompt", () => {
+    const url = "https://example.com/article";
+    const ja = toPendingPrompt(
+      { type: "post", tone: "formal", length: "short", url },
+      "ja",
+    );
+    expect(ja).toContain(url);
+    expect(ja).not.toContain(POST_URL_PLACEHOLDER);
+    const en = toPendingPrompt(
+      { type: "post", tone: "casual", length: "long", url },
+      "en",
+    );
+    expect(en).toContain(url);
+    expect(en).not.toContain(POST_URL_PLACEHOLDER);
+  });
+
+  it("emits the url placeholder when no url is provided", () => {
+    const ja = toPendingPrompt({ type: "post" }, "ja");
+    expect(ja).toContain(POST_URL_PLACEHOLDER);
+    expect(ja).toContain("URLを創作しないこと");
+    const en = toPendingPrompt({ type: "post" }, "en");
+    expect(en).toContain(POST_URL_PLACEHOLDER);
+    expect(en).toContain("do not invent a URL");
+  });
+
   it("returns the trimmed body for a custom prompt action", () => {
     expect(
       toPendingPrompt({ type: "customPrompt", text: "  dig deeper  " }, "ja"),
@@ -91,6 +136,43 @@ describe("toPendingPrompt", () => {
       toPendingPrompt({ type: "customPrompt", text: "   " }, "ja"),
     ).toBeNull();
     expect(toPendingPrompt({ type: "customPrompt" }, "ja")).toBeNull();
+  });
+});
+
+describe("pageContentInjectionGuard", () => {
+  it("returns a localized guard line in both languages", () => {
+    expect(pageContentInjectionGuard("ja")).toContain("指示ではありません");
+    expect(pageContentInjectionGuard("en")).toContain("not as instructions");
+  });
+
+  it("is appended to post prompts (all four variants)", () => {
+    const variants = [
+      { tone: "casual", length: "short" },
+      { tone: "casual", length: "long" },
+      { tone: "formal", length: "short" },
+      { tone: "formal", length: "long" },
+    ] as const;
+    for (const v of variants) {
+      const ja = toPendingPrompt({ type: "post", ...v }, "ja") ?? "";
+      expect(ja).toContain(pageContentInjectionGuard("ja"));
+      const en = toPendingPrompt({ type: "post", ...v }, "en") ?? "";
+      expect(en).toContain(pageContentInjectionGuard("en"));
+    }
+  });
+
+  it("is appended to summarize and summarize-and-save prompts", () => {
+    expect(toPendingPrompt({ type: "summarize" }, "ja")).toContain(
+      pageContentInjectionGuard("ja"),
+    );
+    expect(toPendingPrompt({ type: "summarize" }, "en")).toContain(
+      pageContentInjectionGuard("en"),
+    );
+    expect(getSummarizeAndSavePrompt("ja")).toContain(
+      pageContentInjectionGuard("ja"),
+    );
+    expect(getSummarizeAndSavePrompt("en")).toContain(
+      pageContentInjectionGuard("en"),
+    );
   });
 });
 

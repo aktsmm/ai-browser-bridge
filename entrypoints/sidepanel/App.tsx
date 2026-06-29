@@ -42,6 +42,7 @@ import {
   getPendingActionTabId,
   normalizeCustomPrompts,
   type PendingAction,
+  POST_URL_PLACEHOLDER,
   toPendingPrompt,
 } from "./pending-action";
 import {
@@ -1266,16 +1267,31 @@ export default function App() {
 
     inFlightRequestRef.current = true;
 
+    // ポストのクイックアクション等で埋め込まれたURLプレースホルダを、
+    // 現在ページの実URLへ決定論的に置換する（モデルにURLを創作させない）。
+    let resolvedMessage = userMessage;
+    if (resolvedMessage.includes(POST_URL_PLACEHOLDER)) {
+      let pageUrl = "";
+      try {
+        ({ pageUrl } = await getCurrentPageMetadata());
+      } catch {
+        pageUrl = "";
+      }
+      resolvedMessage = resolvedMessage
+        .split(POST_URL_PLACEHOLDER)
+        .join(pageUrl);
+    }
+
     const wantsContentOnly =
-      /\b(translate|translation|summarize|summary)\b/i.test(userMessage) ||
-      /(翻訳|要約|まとめ|全文|全内容|全部|記事|英文に)/.test(userMessage);
+      /\b(translate|translation|summarize|summary)\b/i.test(resolvedMessage) ||
+      /(翻訳|要約|まとめ|全文|全内容|全部|記事|英文に)/.test(resolvedMessage);
     const autoScrollForLazyLoad = /(全文|全内容|全部|記事全体|最後まで)/.test(
-      userMessage,
+      resolvedMessage,
     );
 
     const newUserMessage: ChatMessage = {
       role: "user",
-      content: `${userMessage}${buildAttachmentDisplayText(attachments, {
+      content: `${resolvedMessage}${buildAttachmentDisplayText(attachments, {
         heading: t("attachedFiles", language),
         pdfNote: t("pdfAttachmentFallback", language),
         textLabel: t("attachmentTextLabel", language),

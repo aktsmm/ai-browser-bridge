@@ -17,7 +17,7 @@ Chrome extension to analyze, interact, and automate browser pages with LLM (GitH
   - Screenshot Mode: Visual understanding via Vision API
   - Hybrid Mode: Text-first, screenshot fallback
 - **Playwright-compatible Actions**: Double-click, right-click, form fill, etc.
-- **Right-click Menu & Quick Actions**: Summarize the page, generate a social post (with hashtags), or run your own custom prompts from the page context menu and the post-reply buttons. Custom prompt names and content are editable in Settings.
+- **Right-click Menu & Quick Actions**: Summarize the page, generate a social post, or run your own custom prompts from the page context menu and the post-reply buttons. The post generator offers two tones (casual / formal) and two lengths (a roughly 140-character target, or a longer ~500-character version with extra detail) as a submenu, structures the output (takeaway, bullet points, source URL, hashtags), and inserts the current page URL automatically. The Chat quick actions include a length toggle (140 / 500) so all four variants are reachable. Custom prompt names and content are editable in Settings.
 
 ## Installation
 

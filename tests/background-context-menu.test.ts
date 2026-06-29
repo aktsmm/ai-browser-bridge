@@ -39,18 +39,53 @@ describe("background context menu actions", () => {
     });
   });
 
-  it("builds post pending actions from the page context menu", () => {
+  it("builds post pending actions from the page context submenu", () => {
+    expect(
+      backgroundModule.buildPendingActionFromContextMenu(
+        { menuItemId: "postFormalLong" },
+        { id: 789, url: "https://example.com/post", title: "Post" },
+      ),
+    ).toEqual({
+      type: "post",
+      tone: "formal",
+      length: "long",
+      tabId: 789,
+      url: "https://example.com/post",
+      title: "Post",
+    });
+  });
+
+  it("maps every post submenu item to its tone and length", () => {
+    const cases = [
+      { id: "postCasualShort", tone: "casual", length: "short" },
+      { id: "postCasualLong", tone: "casual", length: "long" },
+      { id: "postFormalShort", tone: "formal", length: "short" },
+      { id: "postFormalLong", tone: "formal", length: "long" },
+    ] as const;
+    for (const { id, tone, length } of cases) {
+      expect(
+        backgroundModule.buildPendingActionFromContextMenu(
+          { menuItemId: id },
+          { id: 1, url: "https://example.com", title: "Example" },
+        ),
+      ).toEqual({
+        type: "post",
+        tone,
+        length,
+        tabId: 1,
+        url: "https://example.com",
+        title: "Example",
+      });
+    }
+  });
+
+  it("does not build a post action from the parent menu id alone", () => {
     expect(
       backgroundModule.buildPendingActionFromContextMenu(
         { menuItemId: "postAboutPage" },
         { id: 789, url: "https://example.com/post", title: "Post" },
       ),
-    ).toEqual({
-      type: "post",
-      tabId: 789,
-      url: "https://example.com/post",
-      title: "Post",
-    });
+    ).toBeNull();
   });
 
   it("resolves custom prompt menu items to their stored body", () => {
@@ -129,5 +164,86 @@ describe("background context menu actions", () => {
 
     expect(setPendingAction).not.toHaveBeenCalled();
     expect(openSidePanel).not.toHaveBeenCalled();
+  });
+});
+
+describe("buildContextMenuSpecs", () => {
+  it("registers the post submenu as a parent with four children", () => {
+    const specs = backgroundModule.buildContextMenuSpecs([]);
+    const parent = specs.find(
+      (spec) => spec.id === backgroundModule.POST_PARENT_MENU_ID,
+    );
+    expect(parent).toBeDefined();
+    expect(parent?.parentId).toBeUndefined();
+
+    const children = specs.filter(
+      (spec) => spec.parentId === backgroundModule.POST_PARENT_MENU_ID,
+    );
+    expect(children.map((spec) => spec.id).sort()).toEqual(
+      Object.keys(backgroundModule.POST_MENU_ITEMS).sort(),
+    );
+    expect(children).toHaveLength(4);
+    for (const child of children) {
+      expect(child.contexts).toEqual(["page"]);
+    }
+  });
+
+  it("creates each parent before its children", () => {
+    const specs = backgroundModule.buildContextMenuSpecs([]);
+    const parentIndex = specs.findIndex(
+      (spec) => spec.id === backgroundModule.POST_PARENT_MENU_ID,
+    );
+    const firstChildIndex = specs.findIndex(
+      (spec) => spec.parentId === backgroundModule.POST_PARENT_MENU_ID,
+    );
+    expect(parentIndex).toBeGreaterThanOrEqual(0);
+    expect(parentIndex).toBeLessThan(firstChildIndex);
+  });
+
+  it("includes the static selection and summarize entries", () => {
+    const ids = backgroundModule.buildContextMenuSpecs([]).map((s) => s.id);
+    expect(ids).toContain("askAboutSelection");
+    expect(ids).toContain("summarizePage");
+  });
+
+  it("pins the static entries' order, contexts and titles", () => {
+    const specs = backgroundModule.buildContextMenuSpecs([]);
+    expect(specs.slice(0, 3)).toEqual([
+      {
+        id: "askAboutSelection",
+        title: "AI Browser Bridgeで質問",
+        contexts: ["selection"],
+      },
+      {
+        id: "summarizePage",
+        title: "このページを要約",
+        contexts: ["page"],
+      },
+      {
+        id: backgroundModule.POST_PARENT_MENU_ID,
+        title: "このページでポストを作成",
+        contexts: ["page"],
+      },
+    ]);
+  });
+
+  it("gives custom prompt entries page and selection contexts", () => {
+    const specs = backgroundModule.buildContextMenuSpecs([
+      { id: "a1", name: "有効", body: "本文あり" },
+    ]);
+    const custom = specs.find((s) => s.id === "customPrompt:a1");
+    expect(custom?.contexts).toEqual(["page", "selection"]);
+  });
+
+  it("appends valid custom prompts and skips empty ones", () => {
+    const specs = backgroundModule.buildContextMenuSpecs([
+      { id: "a1", name: "有効", body: "本文あり" },
+      { id: "a2", name: "  ", body: "本文あり" },
+      { id: "a3", name: "名前あり", body: "   " },
+    ]);
+    const customIds = specs
+      .map((s) => s.id)
+      .filter((id) => id.startsWith("customPrompt:"));
+    expect(customIds).toEqual(["customPrompt:a1"]);
   });
 });

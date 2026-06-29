@@ -6,10 +6,102 @@ import {
   DEFAULT_CUSTOM_PROMPTS,
   normalizeCustomPrompts,
 } from "./sidepanel/pending-action";
-import type { CustomPrompt, PendingAction } from "./sidepanel/pending-action";
+import type {
+  CustomPrompt,
+  PendingAction,
+  PostLength,
+  PostTone,
+} from "./sidepanel/pending-action";
 
 /** カスタムプロンプトのコンテキストメニュー id 接頭辞。 */
 export const CUSTOM_PROMPT_MENU_PREFIX = "customPrompt:";
+
+/** ポスト作成サブメニューの子 id → トーン/長さの対応。 */
+export const POST_MENU_ITEMS: Record<
+  string,
+  { tone: PostTone; length: PostLength; title: string }
+> = {
+  postCasualShort: {
+    tone: "casual",
+    length: "short",
+    title: "カジュアル（140字）",
+  },
+  postCasualLong: {
+    tone: "casual",
+    length: "long",
+    title: "カジュアル（500字・具体例つき）",
+  },
+  postFormalShort: {
+    tone: "formal",
+    length: "short",
+    title: "フォーマル（140字）",
+  },
+  postFormalLong: {
+    tone: "formal",
+    length: "long",
+    title: "フォーマル（500字・具体例つき）",
+  },
+};
+
+/** ポスト作成サブメニューの親 id。 */
+export const POST_PARENT_MENU_ID = "postAboutPage";
+
+/** コンテキストメニュー1項目の生成仕様。`browser.contextMenus.create` にそのまま渡せる。 */
+export type ContextMenuSpec = {
+  id: string;
+  title: string;
+  contexts: chrome.contextMenus.ContextType[];
+  parentId?: string;
+};
+
+/**
+ * 登録すべきコンテキストメニュー項目の一覧を純粋関数として返す。
+ * 静的項目（選択質問 / 要約 / ポスト親 + 子4）＋ 有効なカスタムプロンプトを、
+ * 実際に `create` する順序で返す（親は子より前）。副作用を持たないためテスト可能。
+ */
+export function buildContextMenuSpecs(
+  customPrompts: CustomPrompt[] = [],
+): ContextMenuSpec[] {
+  const specs: ContextMenuSpec[] = [
+    {
+      id: "askAboutSelection",
+      title: "AI Browser Bridgeで質問",
+      contexts: ["selection"],
+    },
+    {
+      id: "summarizePage",
+      title: "このページを要約",
+      contexts: ["page"],
+    },
+    {
+      id: POST_PARENT_MENU_ID,
+      title: "このページでポストを作成",
+      contexts: ["page"],
+    },
+  ];
+
+  for (const [id, { title }] of Object.entries(POST_MENU_ITEMS)) {
+    specs.push({
+      id,
+      parentId: POST_PARENT_MENU_ID,
+      title,
+      contexts: ["page"],
+    });
+  }
+
+  for (const prompt of customPrompts) {
+    const title = prompt.name.trim();
+    const body = prompt.body.trim();
+    if (!title || !body) continue;
+    specs.push({
+      id: `${CUSTOM_PROMPT_MENU_PREFIX}${prompt.id}`,
+      title,
+      contexts: ["page", "selection"],
+    });
+  }
+
+  return specs;
+}
 
 type ContextMenuDeps = {
   setPendingAction: (pendingAction: PendingAction) => Promise<void>;
@@ -41,9 +133,15 @@ export function buildPendingActionFromContextMenu(
     };
   }
 
-  if (info.menuItemId === "postAboutPage") {
+  if (
+    typeof info.menuItemId === "string" &&
+    info.menuItemId in POST_MENU_ITEMS
+  ) {
+    const { tone, length } = POST_MENU_ITEMS[info.menuItemId];
     return {
       type: "post",
+      tone,
+      length,
       tabId: tab?.id,
       url: tab?.url,
       title: tab?.title,
@@ -141,35 +239,10 @@ export default defineBackground({
         browser.contextMenus.removeAll(() => resolve());
       });
 
-      browser.contextMenus.create({
-        id: "askAboutSelection",
-        title: "AI Browser Bridgeで質問",
-        contexts: ["selection"],
-      });
-
-      browser.contextMenus.create({
-        id: "summarizePage",
-        title: "このページを要約",
-        contexts: ["page"],
-      });
-
-      browser.contextMenus.create({
-        id: "postAboutPage",
-        title: "このページでポストを作成",
-        contexts: ["page"],
-      });
-
       const customPrompts = await loadCustomPrompts();
-      customPrompts.forEach((prompt) => {
-        const title = prompt.name.trim();
-        const body = prompt.body.trim();
-        if (!title || !body) return;
-        browser.contextMenus.create({
-          id: `${CUSTOM_PROMPT_MENU_PREFIX}${prompt.id}`,
-          title,
-          contexts: ["page", "selection"],
-        });
-      });
+      for (const spec of buildContextMenuSpecs(customPrompts)) {
+        browser.contextMenus.create(spec);
+      }
     };
 
     // アクションクリックでサイドパネルを開く
