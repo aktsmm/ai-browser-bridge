@@ -86,6 +86,31 @@ describe("standalone bridge server", () => {
     server.stop();
     fs.rmSync(workspaceRoot, { recursive: true, force: true });
   });
+  it("coalesces repeated starts and can restart without losing the server", async () => {
+    const first = server.start();
+    expect(server.start()).toBe(first);
+    await first;
+    expect((await fetch(`${baseUrl}/health`)).status).toBe(200);
+    server.stop();
+    const restarting = server.start();
+    expect(server.start()).toBe(restarting);
+    await restarting;
+    expect((await fetch(`${baseUrl}/health`)).status).toBe(200);
+  });
+  it("settles a cancelled startup", async () => {
+    const transient = new StandaloneBridgeServer(
+      await getFreePort(),
+      "test",
+      workspaceRoot,
+      [],
+    );
+    const starting = transient.start();
+    const rejected = expect(starting).rejects.toThrow(
+      "Server startup cancelled",
+    );
+    transient.stop();
+    await rejected;
+  });
   it("allows the health check without auth headers", async () => {
     const response = await fetch(`${baseUrl}/health`);
     expect(response.status).toBe(200);

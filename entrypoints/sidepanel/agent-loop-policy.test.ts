@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  clampAgentLoops,
   FATAL_AUTONOMOUS_ERROR_THRESHOLD,
   SCREENSHOT_FALLBACK_ERROR_THRESHOLD,
   shouldEnableScreenshotFallback,
@@ -7,6 +8,12 @@ import {
 } from "./agent-loop-policy";
 
 describe("agent loop policy", () => {
+  it("uses the same bounded loop limit for storage, UI and execution", () => {
+    expect(clampAgentLoops(Number.NaN)).toBe(20);
+    expect(clampAgentLoops(1000)).toBe(50);
+    expect(clampAgentLoops(-1)).toBe(1);
+    expect(clampAgentLoops(3.6)).toBe(4);
+  });
   it("enables screenshot fallback only for hybrid mode after threshold", () => {
     expect(
       shouldEnableScreenshotFallback(

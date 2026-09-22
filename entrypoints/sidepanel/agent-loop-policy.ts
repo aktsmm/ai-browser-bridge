@@ -1,5 +1,13 @@
 import type { OperationMode } from "./types";
 
+export const DEFAULT_AGENT_LOOPS = 20;
+export const MAX_AGENT_LOOPS = 50;
+export function clampAgentLoops(value: number): number {
+  return Number.isFinite(value)
+    ? Math.min(MAX_AGENT_LOOPS, Math.max(1, Math.round(value)))
+    : DEFAULT_AGENT_LOOPS;
+}
+
 export const SCREENSHOT_FALLBACK_ERROR_THRESHOLD = 3;
 export const FATAL_AUTONOMOUS_ERROR_THRESHOLD = 5;
 

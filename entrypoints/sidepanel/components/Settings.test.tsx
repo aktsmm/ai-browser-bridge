@@ -4,6 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 
 import { getBridgeProviderStatusLabel, Settings } from "./Settings";
 import type { BridgeCapabilities, LLMSettings } from "../types";
+import { normalizeAssistantSettings } from "../assistant-settings";
+import { PageContextStatus } from "./PageContextStatus";
+import { AssistantPreferences } from "./AssistantPreferences";
 
 const noop = vi.fn();
 
@@ -16,6 +19,7 @@ function buildSettings(provider: LLMSettings["provider"]): LLMSettings {
 }
 
 function renderSettings(options?: {
+  assistant?: boolean;
   provider?: LLMSettings["provider"];
   isConnected?: boolean;
   availableModels?: Array<{ provider: string; id: string; name: string }>;
@@ -28,6 +32,10 @@ function renderSettings(options?: {
 }) {
   return renderToStaticMarkup(
     <Settings
+      assistantSettings={
+        options?.assistant ? normalizeAssistantSettings(null) : undefined
+      }
+      onAssistantSettingsChange={noop}
       settings={buildSettings(options?.provider ?? "auto")}
       onSettingsChange={noop}
       onClose={noop}
@@ -69,6 +77,81 @@ function renderSettings(options?: {
 }
 
 describe("Settings provider UI", () => {
+  it("locks profile replacement while a task is running", () => {
+    const html = renderToStaticMarkup(
+      <AssistantPreferences
+        value={normalizeAssistantSettings({
+          profiles: [
+            { id: "a", name: "A", instructions: "" },
+            { id: "b", name: "B", instructions: "" },
+          ],
+        })}
+        onChange={noop}
+        busy
+      />,
+    );
+    expect(html).toMatch(/<select[^>]*disabled=""/);
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Add profile/);
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Delete profile/);
+  });
+  it("does not confuse model generation with page acquisition", () => {
+    const html = renderToStaticMarkup(
+      <PageContextStatus
+        state={{
+          status: "ok",
+          content: "page",
+          frames: [{ frameId: 0 }],
+          capturedAt: 0,
+        }}
+        origin="https://example.com"
+        language="en"
+        busy={true}
+        onRead={noop}
+        onAllow={noop}
+      />,
+    );
+    expect(html).toContain("Page ready");
+    expect(html).not.toContain("Reading page...");
+    expect(html).toContain('disabled=""');
+    expect(html).toContain("DOM");
+  });
+  it("presents page permission recovery without internal status codes", () => {
+    const html = renderToStaticMarkup(
+      <PageContextStatus
+        state={{
+          status: "permission-required",
+          content: "",
+          frames: [],
+          capturedAt: 0,
+        }}
+        origin="https://example.com"
+        language="en"
+        busy={false}
+        onRead={noop}
+        onAllow={noop}
+      />,
+    );
+    expect(html).toContain("Site permission required");
+    expect(html).toContain("Allow this site");
+    expect(html).toContain("Read current page");
+    expect(html).not.toContain("permission-required");
+  });
+  it("uses an accessible full-height settings view with keyboard tabs", () => {
+    const html = renderSettings({ assistant: true });
+    expect(html).toContain('aria-label="Close settings"');
+    expect(html).toContain('role="tablist"');
+    expect(html).toContain('id="settings-tab-assistant"');
+    expect(html).toContain('role="tabpanel"');
+    expect(html).not.toContain("max-h-[70vh]");
+  });
+  it("matches runtime limits and hides unavailable legacy controls", () => {
+    const html = renderSettings({ assistant: true, provider: "lm-studio" });
+    expect(html).toContain('max="50"');
+    expect(html).toContain("default: 20");
+    expect(html).not.toContain('max="1000"');
+    expect(html).not.toContain('id="evaluate-action-hint"');
+    expect(html).toContain("Automatic file saving is unavailable in this mode");
+  });
   it("renders primary provider choices and keeps SDK/CLI out of normal selection", () => {
     const html = renderSettings();
 

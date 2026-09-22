@@ -62,6 +62,21 @@ async function main() {
   const chromeSettingsSource = await readTextFile(chromeSettingsPath);
   const chromeAutoProviderSource = await readTextFile(chromeAutoProviderPath);
   const vscodeLlmRouterSource = await readTextFile(vscodeLlmRouterPath);
+  const contextSource = await readTextFile(
+    path.join(vscodeDirectory, "src", "chat-context.ts"),
+  );
+  const standaloneContextSource = await readTextFile(
+    path.join(chromeDirectory, "standalone-bridge", "src", "chat-context.ts"),
+  );
+  if (
+    !contextSource.trim() ||
+    contextSource.replace(/\s+/g, "") !==
+      standaloneContextSource.replace(/\s+/g, "")
+  ) {
+    failures.push(
+      "VS Code and standalone chat-context contracts must stay identical",
+    );
+  }
 
   const expectedVersionFallback = `version: process.env.npm_package_version || "${chromePackage.version}"`;
   if (!wxtConfigSource.includes(expectedVersionFallback)) {

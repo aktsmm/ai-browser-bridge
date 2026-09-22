@@ -1,6 +1,13 @@
 import React, { useState, useEffect, useRef } from "react";
+import {
+  ASSISTANT_SETTINGS_KEY,
+  buildChatContext,
+  normalizeAssistantSettings,
+  type TaskOptions,
+} from "./assistant-settings";
 import { Settings } from "./components/Settings";
 import { Chat } from "./components/Chat";
+import { PageContextStatus } from "./components/PageContextStatus";
 import type {
   LLMSettings,
   ChatMessage,
@@ -23,6 +30,8 @@ import { t } from "./i18n";
 import { BRIDGE_CLIENT_HEADERS } from "./constants";
 import { DEFAULT_SERVER_PORT, normalizeServerPort } from "./server-port";
 import {
+  DEFAULT_AGENT_LOOPS,
+  clampAgentLoops,
   shouldEnableScreenshotFallback,
   shouldStopAutonomousLoopAfterFailures,
 } from "./agent-loop-policy";
@@ -30,13 +39,15 @@ import {
   buildArtifactRelativePath,
   buildBlogDraftContent,
   buildSavedMarkdownContent,
+  getAnswerArtifactInput,
 } from "./artifact-template";
 import { buildAttachmentDisplayText, type ChatAttachment } from "./attachments";
 import { localizeFileOperationError } from "./file-operation-error";
 import { fetchModelsWithRetry } from "./model-fetch";
-import { readUtf8Stream } from "./stream-reader";
+import { readUtf8Stream, finishStoppedConversation } from "./stream-reader";
 import {
   CUSTOM_PROMPTS_STORAGE_KEY,
+  canDispatchPendingAction,
   type CustomPrompt,
   DEFAULT_CUSTOM_PROMPTS,
   getPendingActionTabId,
@@ -54,12 +65,27 @@ import {
   resolveAllowEvaluateAction,
 } from "./evaluate-setting-policy";
 import { parseBridgeCapabilities } from "./bridge-capabilities";
-import { formatConnectionFailureDetail } from "./connection-diagnostics";
+import {
+  formatConnectionFailureDetail,
+  formatChatError,
+  TaskBlockedError,
+} from "./connection-diagnostics";
 import {
   buildPageContentUnavailableContext,
   isPageContentUnavailableContext,
 } from "./page-content-diagnostics";
 import { resolveSelectedCopilotModel } from "./copilot-model-selection";
+import {
+  isPrivateBrowserTab,
+  assertPageShareAllowed,
+  markPrivateBrowserTab,
+  loadPersonalProfile,
+  normalizePersonalProfile,
+  personalValues,
+  redactPrivateText,
+} from "./personal-profile";
+import { effectiveBrowserActions } from "../../standalone-bridge/src/chat-context";
+import { readPageWithRecovery, type PageContextResult } from "./page-context";
 
 const DEFAULT_SETTINGS: LLMSettings = {
   provider: "auto",
@@ -72,13 +98,7 @@ const DEFAULT_SETTINGS: LLMSettings = {
   },
 };
 
-const DEFAULT_AGENT_LOOPS = 500;
-const MIN_AGENT_LOOPS = 1;
-const MAX_AGENT_LOOPS = 1000;
 const DEFAULT_SAVE_RELATIVE_PATH = "output/blog";
-const LEGACY_FULL_AUTO_MIGRATION_KEY = "fullAutoMigratedV1";
-const FULL_AUTO_MIGRATION_VERSION_KEY = "fullAutoMigrationVersion";
-const FULL_AUTO_MIGRATION_TARGET_VERSION = 2;
 const HIGH_RISK_ACTION_TYPES: ReadonlySet<BrowserAction["type"]> = new Set([
   "newTab",
   "closeTab",
@@ -92,31 +112,6 @@ const HIGH_RISK_ACTION_TYPES: ReadonlySet<BrowserAction["type"]> = new Set([
 
 function isHighRiskAction(action: BrowserAction): boolean {
   return HIGH_RISK_ACTION_TYPES.has(action.type);
-}
-
-function resolveFullAutoMigrationVersion(result: {
-  fullAutoMigrationVersion?: unknown;
-  fullAutoMigratedV1?: unknown;
-}): number {
-  if (typeof result.fullAutoMigrationVersion === "number") {
-    return result.fullAutoMigrationVersion;
-  }
-
-  if (result.fullAutoMigratedV1 === true) {
-    return 1;
-  }
-
-  return 0;
-}
-
-function clampAgentLoops(value: number): number {
-  if (!Number.isFinite(value)) {
-    return DEFAULT_AGENT_LOOPS;
-  }
-  return Math.min(
-    MAX_AGENT_LOOPS,
-    Math.max(MIN_AGENT_LOOPS, Math.round(value)),
-  );
 }
 
 function isLanguage(value: unknown): value is Language {
@@ -138,7 +133,14 @@ function usesCopilotModelProvider(provider: LLMSettings["provider"]): boolean {
 function supportsAutonomousLoopProvider(
   provider: LLMSettings["provider"],
 ): boolean {
-  return provider === "auto" || provider === "copilot-agent";
+  return [
+    "auto",
+    "copilot",
+    "copilot-agent",
+    "copilot-sdk",
+    "copilot-cli",
+    "lm-studio",
+  ].includes(provider);
 }
 
 function isValidLlmSettings(value: unknown): value is LLMSettings {
@@ -188,10 +190,39 @@ function normalizeLoadedLlmSettings(settings: LLMSettings): LLMSettings {
 
 export default function App() {
   const [settings, setSettings] = useState<LLMSettings>(DEFAULT_SETTINGS);
+  const [assistantSettings, setAssistantSettings] = useState(() =>
+    normalizeAssistantSettings(null),
+  );
+  const pendingTaskRef = useRef<TaskOptions | undefined>(undefined);
+  const isolatedTaskRef = useRef(false);
+  const [pageState, setPageState] = useState<PageContextResult | null>(null);
+  const pageStateRef = useRef<PageContextResult | null>(null);
+  const [pageOrigin, setPageOrigin] = useState("");
+  const [isReadingPage, setIsReadingPage] = useState(false);
+  const readingPageRef = useRef(false);
+  const [personalProfile, setPersonalProfile] = useState(() =>
+    normalizePersonalProfile(null),
+  );
+  const personalProfileRef = useRef(personalProfile);
+  const privacyReadyRef = useRef<Promise<boolean>>(Promise.resolve(false));
+  const [profileAuthorization, setProfileAuthorization] = useState("");
+  const privateTabsRef = useRef(new Set<number>());
+  useEffect(() => {
+    privacyReadyRef.current = loadPersonalProfile()
+      .then((profile) => {
+        personalProfileRef.current = profile;
+        setPersonalProfile(profile);
+        return true;
+      })
+      .catch(() => false);
+  }, []);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [isSavingAnswer, setIsSavingAnswer] = useState(false);
+  const savingAnswerRef = useRef(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
   const [modelFetchFailed, setModelFetchFailed] = useState(false);
   const [connectionErrorDetail, setConnectionErrorDetail] = useState<
@@ -250,8 +281,7 @@ export default function App() {
         "saveDestinationMode",
         "saveRelativePath",
         CUSTOM_PROMPTS_STORAGE_KEY,
-        FULL_AUTO_MIGRATION_VERSION_KEY,
-        LEGACY_FULL_AUTO_MIGRATION_KEY,
+        ASSISTANT_SETTINGS_KEY,
         "pendingAction",
       ],
       (result: {
@@ -267,25 +297,22 @@ export default function App() {
         saveDestinationMode?: SaveDestinationMode;
         saveRelativePath?: string;
         customPrompts?: unknown;
-        fullAutoMigrationVersion?: number;
-        fullAutoMigratedV1?: boolean;
+        assistantSettingsV1?: unknown;
         pendingAction?: PendingAction;
       }) => {
         let effectiveServerPort = DEFAULT_SERVER_PORT;
+        setAssistantSettings(
+          normalizeAssistantSettings(result.assistantSettingsV1),
+        );
         let effectiveAllowEvaluateAction = defaultAllowEvaluateAction();
         const effectiveLanguage = isLanguage(result.language)
           ? result.language
           : language;
-        const migrationVersion = resolveFullAutoMigrationVersion(result);
-        const shouldForceFullAutoMigration =
-          migrationVersion < FULL_AUTO_MIGRATION_TARGET_VERSION;
 
         if (isValidLlmSettings(result.llmSettings)) {
           setSettings(normalizeLoadedLlmSettings(result.llmSettings));
         }
-        if (shouldForceFullAutoMigration) {
-          setBrowserActionsEnabled(true);
-        } else if (result.browserActionsEnabled !== undefined) {
+        if (result.browserActionsEnabled !== undefined) {
           setBrowserActionsEnabled(result.browserActionsEnabled);
         }
         if (result.fileOperationsEnabled !== undefined) {
@@ -304,14 +331,12 @@ export default function App() {
           effectiveServerPort = normalizeServerPort(result.serverPort);
           setServerPort(effectiveServerPort);
         }
-        if (shouldForceFullAutoMigration) {
-          setAllowHighRiskActions(true);
-        } else if (typeof result.allowHighRiskActions === "boolean") {
+        if (typeof result.allowHighRiskActions === "boolean") {
           setAllowHighRiskActions(result.allowHighRiskActions);
         }
         effectiveAllowEvaluateAction = resolveAllowEvaluateAction({
           storedValue: result.allowEvaluateAction,
-          shouldForceFullAutoMigration,
+          shouldForceFullAutoMigration: false,
         });
         setAllowEvaluateAction(effectiveAllowEvaluateAction);
         if (
@@ -330,25 +355,6 @@ export default function App() {
           setCustomPrompts(normalizeCustomPrompts(result.customPrompts));
         }
 
-        if (shouldForceFullAutoMigration) {
-          chrome.storage.local.set({
-            browserActionsEnabled: true,
-            allowHighRiskActions: true,
-            allowEvaluateAction: defaultAllowEvaluateAction(),
-            [FULL_AUTO_MIGRATION_VERSION_KEY]:
-              FULL_AUTO_MIGRATION_TARGET_VERSION,
-            [LEGACY_FULL_AUTO_MIGRATION_KEY]: true,
-          });
-
-          setMessages((prev: ChatMessage[]) => [
-            ...prev,
-            {
-              role: "assistant",
-              content: t("fullAutoMigrationNotice", effectiveLanguage),
-            },
-          ]);
-        }
-
         setEvaluateActionEnabled(effectiveAllowEvaluateAction);
 
         const nextPendingPrompt = toPendingPrompt(
@@ -356,6 +362,12 @@ export default function App() {
           effectiveLanguage,
         );
         if (nextPendingPrompt) {
+          pendingTaskRef.current =
+            result.pendingAction?.type === "post"
+              ? { kind: "post", instructions: nextPendingPrompt }
+              : result.pendingAction?.type === "customPrompt"
+                ? { kind: "custom", instructions: nextPendingPrompt }
+                : { kind: "summary" };
           pendingPromptTabIdRef.current = getPendingActionTabId(
             result.pendingAction,
           );
@@ -394,6 +406,12 @@ export default function App() {
       }
       const prompt = toPendingPrompt(newValue, languageRef.current);
       if (prompt) {
+        pendingTaskRef.current =
+          newValue.type === "post"
+            ? { kind: "post", instructions: prompt }
+            : newValue.type === "customPrompt"
+              ? { kind: "custom", instructions: prompt }
+              : { kind: "summary" };
         pendingPromptTabIdRef.current = getPendingActionTabId(newValue);
         setPendingPrompt(prompt);
       }
@@ -423,6 +441,7 @@ export default function App() {
       saveDestinationMode,
       saveRelativePath,
       [CUSTOM_PROMPTS_STORAGE_KEY]: customPrompts,
+      [ASSISTANT_SETTINGS_KEY]: assistantSettings,
     });
   }, [
     settings,
@@ -437,6 +456,7 @@ export default function App() {
     saveDestinationMode,
     saveRelativePath,
     customPrompts,
+    assistantSettings,
   ]);
 
   useEffect(() => {
@@ -739,15 +759,6 @@ export default function App() {
     };
   };
 
-  const getLatestAssistantMessage = () => {
-    for (let index = messages.length - 1; index >= 0; index--) {
-      if (messages[index].role === "assistant") {
-        return messages[index].content;
-      }
-    }
-    return "";
-  };
-
   const getCurrentPageMetadata = async () => {
     const [tab] = await chrome.tabs.query({
       active: true,
@@ -775,6 +786,7 @@ export default function App() {
         {
           role: "assistant",
           content: `📥 ${t("saveSuccess", language).replace("{path}", result.filename)}${showLink}\n\n📂 ${result.destinationMessage}`,
+          kind: "notice",
         },
       ]);
       return;
@@ -785,53 +797,61 @@ export default function App() {
       {
         role: "assistant",
         content: `⚠️ ${t("saveFailure", language).replace("{reason}", result.error || t("saveFailureUnknownReason", language))}`,
+        kind: "error",
       },
     ]);
   };
 
-  const saveLatestAssistantMarkdown = async (
+  const saveAssistantMarkdown = async (
     kind: "summary" | "blog-draft",
+    message: ChatMessage,
   ) => {
-    const assistantContent = getLatestAssistantMessage().trim();
-    if (!assistantContent) {
+    if (savingAnswerRef.current) return false;
+    const artifact = getAnswerArtifactInput(message);
+    if (!artifact) {
       pushSaveResultMessage({
         success: false,
         filename: "",
         error: t("saveFailureNoAssistantResponse", language),
       });
-      return;
+      return false;
     }
 
-    const createdAt = new Date();
-    const { pageTitle, pageUrl } = await getCurrentPageMetadata();
-    const relativePath = buildArtifactRelativePath(
-      saveRelativePath || DEFAULT_SAVE_RELATIVE_PATH,
-      pageTitle,
-      kind,
-      createdAt,
-    );
+    savingAnswerRef.current = true;
+    setIsSavingAnswer(true);
+    try {
+      const { pageTitle, createdAt } = artifact;
+      const relativePath = buildArtifactRelativePath(
+        saveRelativePath || DEFAULT_SAVE_RELATIVE_PATH,
+        pageTitle,
+        kind,
+        createdAt,
+        crypto.randomUUID(),
+      );
 
-    const content =
-      kind === "blog-draft"
-        ? buildBlogDraftContent({
-            pageTitle,
-            pageUrl,
-            assistantContent,
-            createdAt,
-          })
-        : buildSavedMarkdownContent({
-            pageTitle,
-            pageUrl,
-            assistantContent,
-            createdAt,
-          });
+      const content =
+        kind === "blog-draft"
+          ? buildBlogDraftContent(artifact)
+          : buildSavedMarkdownContent(artifact);
 
-    const result = await saveTextArtifact({
-      relativePath,
-      content,
-      mimeType: "text/markdown;charset=utf-8",
-    });
-    pushSaveResultMessage(result);
+      const result = await saveTextArtifact({
+        relativePath,
+        content,
+        mimeType: "text/markdown;charset=utf-8",
+      });
+      pushSaveResultMessage(result);
+      return result.success;
+    } catch {
+      pushSaveResultMessage({
+        success: false,
+        filename: "",
+        error: t("saveFailureUnknownReason", language),
+      });
+      return false;
+    } finally {
+      savingAnswerRef.current = false;
+      setIsSavingAnswer(false);
+    }
   };
 
   const maybeWarnScreenshotPermission = (error: unknown) => {
@@ -847,13 +867,18 @@ export default function App() {
         {
           role: "assistant",
           content: t("screenshotPermissionWarning", language),
+          kind: "notice",
         },
       ]);
     }
   };
 
   const captureScreenshotForActiveContentTab = async (): Promise<string> => {
+    if (Object.keys(personalValues(personalProfileRef.current)).length > 0)
+      return "";
     const targetTabId = activeContentTabIdRef.current;
+    if (targetTabId !== null && privateTabsRef.current.has(targetTabId))
+      return "";
     if (typeof targetTabId === "number") {
       const tab = await chrome.tabs.get(targetTabId).catch(() => undefined);
       if (!tab?.active) {
@@ -861,7 +886,7 @@ export default function App() {
       }
     }
 
-    return await captureScreenshot();
+    return await captureScreenshot(targetTabId ?? undefined);
   };
 
   const extractPageContent = async (options?: {
@@ -880,12 +905,22 @@ export default function App() {
               })
             )[0];
       if (!tab?.id || !tab.url) {
+        pageStateRef.current = {
+          status: "failed",
+          content: "",
+          frames: [],
+          capturedAt: Date.now(),
+        };
+        setPageState(pageStateRef.current);
         return buildPageContentUnavailableContext({
           lang: languageRef.current,
           reason: "no-tab",
         });
       }
 
+      setPageOrigin(
+        /^https?:\/\//.test(tab.url) ? new URL(tab.url).origin : "",
+      );
       // chrome://, edge://, about: などのシステムページはスキップ
       if (
         tab.url.startsWith("chrome://") ||
@@ -893,6 +928,13 @@ export default function App() {
         tab.url.startsWith("about:") ||
         tab.url.startsWith("chrome-extension://")
       ) {
+        pageStateRef.current = {
+          status: "unsupported",
+          content: "",
+          frames: [],
+          capturedAt: Date.now(),
+        };
+        setPageState(pageStateRef.current);
         return buildPageContentUnavailableContext({
           lang: languageRef.current,
           reason: "unsupported-page",
@@ -904,8 +946,8 @@ export default function App() {
       const mode = options?.mode ?? "interactive";
       const autoScrollForLazyLoad = options?.autoScrollForLazyLoad ?? false;
 
-      const results = await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
+      const injection = {
+        target: { tabId: tab.id, allFrames: true },
         func: async (opts: {
           mode: "interactive" | "content";
           autoScrollForLazyLoad: boolean;
@@ -913,6 +955,30 @@ export default function App() {
           const VIEWPORT_MARGIN_PX = 200;
           const MAX_VIEWPORT_CHARS = 12000;
           const MAX_FULL_CHARS = 45000;
+          if (!document.body)
+            return {
+              text: "",
+              elements: "",
+              textLength: 0,
+              elementCount: 0,
+              url: location.href,
+              title: document.title,
+            };
+          const roots: (Document | ShadowRoot)[] = [document];
+          for (
+            let rootIndex = 0;
+            rootIndex < roots.length && roots.length < 100;
+            rootIndex++
+          ) {
+            roots[rootIndex].querySelectorAll("*").forEach((element) => {
+              if (element.shadowRoot && roots.length < 100)
+                roots.push(element.shadowRoot);
+            });
+          }
+          const queryAll = (selector: string) =>
+            roots.flatMap((root) =>
+              Array.from(root.querySelectorAll(selector)),
+            );
 
           const shouldRejectParent = (parent: HTMLElement) => {
             const tag = parent.tagName;
@@ -927,7 +993,11 @@ export default function App() {
               return true;
             }
             const style = getComputedStyle(parent);
-            if (style.display === "none" || style.visibility === "hidden") {
+            if (
+              style.display === "none" ||
+              style.visibility === "hidden" ||
+              !parent.getClientRects().length
+            ) {
               return true;
             }
             return false;
@@ -937,39 +1007,47 @@ export default function App() {
             onlyViewport: boolean,
             maxChars: number,
           ): string => {
-            const walker = document.createTreeWalker(
-              document.body,
-              NodeFilter.SHOW_TEXT,
-              {
-                acceptNode: (node) => {
-                  const parent = node.parentElement as HTMLElement | null;
-                  if (!parent) return NodeFilter.FILTER_REJECT;
-                  if (shouldRejectParent(parent))
-                    return NodeFilter.FILTER_REJECT;
-
-                  if (onlyViewport) {
-                    const rect = parent.getBoundingClientRect();
-                    const within =
-                      rect.bottom >= -VIEWPORT_MARGIN_PX &&
-                      rect.top <= window.innerHeight + VIEWPORT_MARGIN_PX;
-                    if (!within) return NodeFilter.FILTER_REJECT;
-                  }
-
-                  return NodeFilter.FILTER_ACCEPT;
-                },
-              },
-            );
-
             const chunks: string[] = [];
             let total = 0;
-            let node: Node | null;
-            while ((node = walker.nextNode())) {
-              const text = node.textContent?.trim();
-              if (!text) continue;
-              if (text.length === 0) continue;
+            for (const root of roots) {
+              const walker = document.createTreeWalker(
+                root === document
+                  ? opts.mode === "content"
+                    ? document.querySelector("article, main, [role='main']") ||
+                      document.body
+                    : document.body
+                  : root,
+                NodeFilter.SHOW_TEXT,
+                {
+                  acceptNode: (node) => {
+                    const parent = node.parentElement as HTMLElement | null;
+                    if (!parent) return NodeFilter.FILTER_REJECT;
+                    if (shouldRejectParent(parent))
+                      return NodeFilter.FILTER_REJECT;
 
-              chunks.push(text);
-              total += text.length + 1;
+                    if (onlyViewport) {
+                      const rect = parent.getBoundingClientRect();
+                      const within =
+                        rect.bottom >= -VIEWPORT_MARGIN_PX &&
+                        rect.top <= window.innerHeight + VIEWPORT_MARGIN_PX;
+                      if (!within) return NodeFilter.FILTER_REJECT;
+                    }
+
+                    return NodeFilter.FILTER_ACCEPT;
+                  },
+                },
+              );
+
+              let node: Node | null;
+              while ((node = walker.nextNode())) {
+                const text = node.textContent?.trim();
+                if (!text) continue;
+                if (text.length === 0) continue;
+
+                chunks.push(text);
+                total += text.length + 1;
+                if (total >= maxChars) break;
+              }
               if (total >= maxChars) break;
             }
 
@@ -1007,9 +1085,9 @@ export default function App() {
           const fullText =
             opts.mode === "content" ? collectText(false, MAX_FULL_CHARS) : "";
 
-          const pageText =
-            `### Viewport Text\n${scrollInfo}\n\n${viewportText || "(no text found in viewport)"}` +
-            (fullText ? `\n\n### Full Page Text (truncated)\n${fullText}` : "");
+          const selectedText =
+            opts.mode === "content" ? fullText || viewportText : viewportText;
+          const pageText = `${scrollInfo}\n${selectedText}`;
 
           // Playwright-style snapshot: structured element tree
           const elements: string[] = [];
@@ -1049,7 +1127,11 @@ export default function App() {
             const text =
               (el as HTMLElement).textContent?.trim().slice(0, 40) || "";
             const placeholder = el.getAttribute("placeholder") || "";
-            const value = inputEl?.value?.slice(0, 20) || "";
+            const value = ["radio", "checkbox", "button", "submit"].includes(
+              type,
+            )
+              ? inputEl?.value?.slice(0, 20) || ""
+              : "";
             const title = el.getAttribute("title") || "";
 
             // Determine role
@@ -1072,7 +1154,12 @@ export default function App() {
             // Determine name
             let name = ariaLabel || title || "";
             if (!name) {
-              if (role === "textbox") name = placeholder || value;
+              if (role === "textbox")
+                name =
+                  inputEl.labels?.[0]?.textContent?.trim().slice(0, 60) ||
+                  placeholder ||
+                  inputEl.name ||
+                  "Input";
               else if (role === "radio" || role === "checkbox")
                 name = ariaLabel || text || value;
               else name = text.slice(0, 30);
@@ -1117,18 +1204,16 @@ export default function App() {
           const candidates: Array<{ el: Element; rect: DOMRect }> = [];
           const seen = new Set<Element>();
 
-          document
-            .querySelectorAll(interactiveSelectors.join(", "))
-            .forEach((el) => {
-              if (!isVisible(el)) return;
-              if (seen.has(el)) return;
-              seen.add(el);
-              const rect = el.getBoundingClientRect();
-              candidates.push({ el, rect });
-            });
+          queryAll(interactiveSelectors.join(", ")).forEach((el) => {
+            if (!isVisible(el)) return;
+            if (seen.has(el)) return;
+            seen.add(el);
+            const rect = el.getBoundingClientRect();
+            candidates.push({ el, rect });
+          });
 
           // Add pointer-cursor elements (often clickable divs/spans)
-          document.querySelectorAll("*").forEach((el) => {
+          queryAll("*").forEach((el) => {
             if (!isVisible(el)) return;
             const style = getComputedStyle(el);
             if (style.cursor === "pointer") {
@@ -1143,7 +1228,9 @@ export default function App() {
           const viewportTop = -200;
           const viewportBottom = window.innerHeight + 400;
 
-          const usedRefIds = new Set<string>();
+          queryAll("[data-copilot-ref]").forEach((element) =>
+            element.removeAttribute("data-copilot-ref"),
+          );
 
           candidates
             .sort((a, b) => a.rect.top - b.rect.top)
@@ -1156,21 +1243,9 @@ export default function App() {
               return aIn ? -1 : 1;
             })
             .forEach(({ el }) => {
-              const existingRef = el.getAttribute("data-copilot-ref");
-              if (!existingRef && refCounter >= maxRefs) return;
-
-              let refId = existingRef || "";
-              if (refId) {
-                refId = refId.toLowerCase();
-                usedRefIds.add(refId);
-              } else {
-                while (usedRefIds.has(`e${refCounter}`)) {
-                  refCounter++;
-                }
-                refId = `e${refCounter++}`;
-                el.setAttribute("data-copilot-ref", refId);
-                usedRefIds.add(refId);
-              }
+              if (refCounter >= maxRefs) return;
+              const refId = `e${refCounter++}`;
+              el.setAttribute("data-copilot-ref", refId);
               refMap.set(el, refId);
 
               const { role, name, inputLike } = getElementInfo(el);
@@ -1212,11 +1287,7 @@ export default function App() {
             });
 
           // Build output
-          let output = `
-### Page Snapshot (use ref:X to click)
-**Usage:** [ACTION: click, ref:e5] to click element e5
-
-`;
+          let output = "";
 
           // Add ungrouped elements
           if (elements.length > 0) {
@@ -1232,18 +1303,75 @@ export default function App() {
             }
           });
 
-          if (opts.mode === "content") {
-            return pageText;
-          }
-
-          return pageText + "\n\n" + output;
+          return {
+            text: pageText,
+            elements: opts.mode === "content" ? "" : output,
+            textLength: selectedText.trim().length,
+            elementCount: opts.mode === "content" ? 0 : refMap.size,
+            url: location.href,
+            title: document.title,
+          };
         },
-        args: [{ mode, autoScrollForLazyLoad }],
-      });
-
-      return results[0]?.result || "";
+        args: [{ mode, autoScrollForLazyLoad }] as [
+          { mode: "interactive" | "content"; autoScrollForLazyLoad: boolean },
+        ],
+      };
+      let partialFrames = false;
+      const result = await readPageWithRecovery(
+        async () => {
+          try {
+            return await chrome.scripting.executeScript(injection);
+          } catch {
+            partialFrames = true;
+            return await chrome.scripting.executeScript({
+              ...injection,
+              target: { tabId: tab.id! },
+            });
+          }
+        },
+        async () => {
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id! },
+            func: () =>
+              new Promise<void>((resolve) => {
+                const observer = new MutationObserver(() => finish());
+                const timer = setTimeout(() => finish(), 700);
+                const finish = () => {
+                  clearTimeout(timer);
+                  observer.disconnect();
+                  resolve();
+                };
+                observer.observe(document.documentElement, {
+                  subtree: true,
+                  childList: true,
+                  characterData: true,
+                });
+              }),
+          });
+        },
+      );
+      if (partialFrames && result.status === "ok") result.status = "partial";
+      pageStateRef.current = result;
+      setPageState(result);
+      return (
+        result.content ||
+        buildPageContentUnavailableContext({
+          lang: languageRef.current,
+          reason: "script-injection-failed",
+          url: tab.url,
+          title: tab.title,
+          detail: result.status,
+        })
+      );
     } catch (error) {
       console.warn("Failed to extract page content:", error);
+      pageStateRef.current = {
+        status: "failed",
+        content: "",
+        frames: [],
+        capturedAt: Date.now(),
+      };
+      setPageState(pageStateRef.current);
       const targetTabId = activeContentTabIdRef.current;
       const tab =
         typeof targetTabId === "number"
@@ -1262,10 +1390,19 @@ export default function App() {
   const sendMessage = async (
     userMessage: string,
     attachments: ChatAttachment[] = [],
+    task?: TaskOptions,
   ) => {
-    if (!userMessage.trim() || isLoading || inFlightRequestRef.current) return;
+    if (
+      !userMessage.trim() ||
+      isLoading ||
+      readingPageRef.current ||
+      inFlightRequestRef.current
+    )
+      return;
 
     inFlightRequestRef.current = true;
+    const history = task || isolatedTaskRef.current ? [] : messages;
+    isolatedTaskRef.current = Boolean(task);
 
     // ポストのクイックアクション等で埋め込まれたURLプレースホルダを、
     // 現在ページの実URLへ決定論的に置換する（モデルにURLを創作させない）。
@@ -1283,6 +1420,7 @@ export default function App() {
     }
 
     const wantsContentOnly =
+      Boolean(task) ||
       /\b(translate|translation|summarize|summary)\b/i.test(resolvedMessage) ||
       /(翻訳|要約|まとめ|全文|全内容|全部|記事|英文に)/.test(resolvedMessage);
     const autoScrollForLazyLoad = /(全文|全内容|全部|記事全体|最後まで)/.test(
@@ -1299,7 +1437,7 @@ export default function App() {
       })}`.trim(),
     };
 
-    setMessages((prev: ChatMessage[]) => [...prev, newUserMessage]);
+    setMessages([...history, newUserMessage]);
     setIsLoading(true);
 
     // Create abort controller for this request
@@ -1307,8 +1445,45 @@ export default function App() {
 
     try {
       // Get page content based on operation mode
+      if (!(await privacyReadyRef.current))
+        throw new TaskBlockedError(
+          "Privacy settings could not be loaded. Reload the extension before sending page information.",
+        );
+      const profileForRun = personalProfileRef.current;
+      if (bridgeCapabilities?.contextVersion !== 1)
+        throw new TaskBlockedError(
+          "The connected bridge does not support assistant instructions and browser policy. Update/rebuild the bridge, restart it, and refresh its capabilities in Settings.",
+        );
       let pageContent = "";
       let screenshotBase64 = "";
+      const targetTab =
+        activeContentTabIdRef.current !== null
+          ? await chrome.tabs.get(activeContentTabIdRef.current)
+          : (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
+      activeContentTabIdRef.current = targetTab?.id ?? null;
+      if (
+        targetTab?.id !== undefined &&
+        (privateTabsRef.current.has(targetTab.id) ||
+          (await isPrivateBrowserTab(targetTab.id)))
+      )
+        throw new TaskBlockedError(
+          "This tab has received personal profile data. Continue manually, or use a new tab for another AI task. Its contents will not be sent to the model.",
+        );
+      const personalForRun =
+        !task &&
+        assistantSettings.mode !== "read-only" &&
+        targetTab?.url &&
+        profileAuthorization === new URL(targetTab.url).origin &&
+        Object.keys(personalValues(profileForRun)).length > 0
+          ? personalValues(profileForRun)
+          : undefined;
+      setProfileAuthorization("");
+      const redact = (text: string) => redactPrivateText(text, profileForRun);
+      const cleanMessages = (items: ChatMessage[]) =>
+        items.map((message) => ({
+          role: message.role,
+          content: redact(message.content),
+        }));
 
       if (operationMode === "screenshot") {
         // Screenshot mode: capture screenshot + DOM elements for ref-based clicking
@@ -1332,18 +1507,90 @@ export default function App() {
         });
       }
 
-      if (wantsContentOnly && isPageContentUnavailableContext(pageContent)) {
+      const visionAvailable =
+        ["auto", "copilot", "copilot-agent"].includes(settings.provider) &&
+        bridgeCapabilities?.providers.some(
+          (provider) =>
+            provider.id === "vscode-lm" &&
+            provider.supportsVision === true &&
+            provider.status === "available",
+        );
+      if (
+        !screenshotBase64 &&
+        operationMode === "hybrid" &&
+        visionAvailable &&
+        ["empty", "failed"].includes(pageStateRef.current?.status ?? "failed")
+      ) {
+        try {
+          screenshotBase64 = await captureScreenshotForActiveContentTab();
+        } catch {
+          screenshotBase64 = "";
+        }
+      }
+      if (
+        screenshotBase64 &&
+        !["ok", "partial"].includes(pageStateRef.current?.status ?? "failed")
+      ) {
+        pageContent =
+          "Only the attached visible screenshot is available. This is not the full page text.";
+        pageStateRef.current = {
+          status: "partial",
+          content: pageContent,
+          frames: [],
+          capturedAt: Date.now(),
+          method: "image",
+        };
+        setPageState(pageStateRef.current);
+      }
+      if (
+        (wantsContentOnly || assistantSettings.mode !== "read-only") &&
+        isPageContentUnavailableContext(pageContent) &&
+        !screenshotBase64
+      ) {
         setMessages((prev: ChatMessage[]) => [
           ...prev,
           {
             role: "assistant",
             content: t("pageContentUnavailableNotice", language),
+            kind: "notice",
           },
         ]);
         return;
       }
 
       // Send to VS Code extension
+      const context = buildChatContext(
+        assistantSettings,
+        targetTab?.id !== undefined && targetTab.url?.match(/^https?:\/\//)
+          ? { tabId: targetTab.id, url: targetTab.url }
+          : undefined,
+        pageStateRef.current?.status ?? "failed",
+        task
+          ? {
+              ...task,
+              instructions: task.instructions
+                ?.split(POST_URL_PLACEHOLDER)
+                .join(targetTab?.url ?? ""),
+            }
+          : undefined,
+        browserActionsEnabled,
+      );
+      if (!pageStateRef.current?.frames.length) context.allowedActions = [];
+      context.profileFields = personalForRun ? Object.keys(personalForRun) : [];
+      context.fileOperationsEnabled =
+        context.mode === "automation" &&
+        fileOperationsEnabled &&
+        !personalForRun;
+      const cleanContext = () => ({
+        ...context,
+        globalInstructions: redact(context.globalInstructions),
+        profileInstructions: redact(context.profileInstructions),
+        taskInstructions: redact(context.taskInstructions),
+        target: context.target
+          ? { ...context.target, url: redact(context.target.url) }
+          : undefined,
+      });
+      await assertPageShareAllowed(targetTab?.id);
       const response = await fetch(`${getBridgeBaseUrl()}/chat`, {
         method: "POST",
         headers: {
@@ -1352,11 +1599,17 @@ export default function App() {
         },
         body: JSON.stringify({
           settings,
-          messages: [...messages, newUserMessage],
-          pageContent,
+          messages: cleanMessages([...history, newUserMessage]),
+          context: cleanContext(),
+          pageContent: redact(pageContent),
           screenshot: screenshotBase64 || undefined,
           operationMode,
-          attachments,
+          attachments: attachments.map((attachment) => ({
+            ...attachment,
+            textContent: attachment.textContent
+              ? redact(attachment.textContent)
+              : undefined,
+          })),
         }),
         signal: abortControllerRef.current.signal,
       });
@@ -1371,10 +1624,19 @@ export default function App() {
         throw new Error("Empty response stream from server");
       }
       const assistantResponsesForFileActions: string[] = [];
+      const responseSource = {
+        pageTitle: targetTab?.title || "Untitled Page",
+        pageUrl: targetTab?.url || "",
+      };
 
       setMessages((prev: ChatMessage[]) => [
         ...prev,
-        { role: "assistant", content: "" },
+        {
+          role: "assistant",
+          content: "",
+          source: responseSource,
+          incomplete: true,
+        },
       ]);
 
       const assistantMessage = await readUtf8Stream(reader, (content) => {
@@ -1383,11 +1645,22 @@ export default function App() {
           newMessages[newMessages.length - 1] = {
             role: "assistant",
             content,
+            source: responseSource,
+            incomplete: true,
           };
           return newMessages;
         });
       });
 
+      setMessages((previous) =>
+        previous.map((message, index) =>
+          index === previous.length - 1 &&
+          message.role === "assistant" &&
+          !message.kind
+            ? { ...message, content: assistantMessage, incomplete: false }
+            : message,
+        ),
+      );
       if (!assistantMessage.trim()) {
         const emptyMessage = t("emptyServerResponse", language);
         setMessages((prev: ChatMessage[]) => {
@@ -1400,10 +1673,14 @@ export default function App() {
             newMessages[newMessages.length - 1] = {
               role: "assistant",
               content: emptyMessage,
+              kind: "error",
             };
             return newMessages;
           }
-          return [...newMessages, { role: "assistant", content: emptyMessage }];
+          return [
+            ...newMessages,
+            { role: "assistant", content: emptyMessage, kind: "error" },
+          ];
         });
         return;
       }
@@ -1415,12 +1692,12 @@ export default function App() {
       console.log("[Agent] Provider:", settings.provider);
       console.log("[Agent] Initial response length:", assistantMessage.length);
 
-      if (browserActionsEnabled) {
+      if (browserActionsEnabled && context.allowedActions.length > 0) {
         const safeMaxAgentLoops = clampAgentLoops(maxAgentLoops);
         let currentResponse = assistantMessage;
         let loopCount = 0;
         let conversationHistory = [
-          ...messages,
+          ...history,
           newUserMessage,
           { role: "assistant" as const, content: assistantMessage },
         ];
@@ -1431,13 +1708,17 @@ export default function App() {
         );
         let consecutiveErrors = 0;
         let consecutiveFailedActionLoops = 0;
+        let stopForReview = false;
         let useScreenshotFallback = operationMode === "screenshot";
 
         while (
           loopCount < safeMaxAgentLoops &&
           !abortControllerRef.current?.signal.aborted
         ) {
-          const parsedActions = parseActionsFromResponse(currentResponse);
+          const parsedActions = parseActionsFromResponse(currentResponse).slice(
+            0,
+            1,
+          );
           const blockedHighRiskActions = allowHighRiskActions
             ? []
             : parsedActions.filter(isHighRiskAction);
@@ -1450,12 +1731,9 @@ export default function App() {
 
           console.log(
             `[Agent Loop] Loop ${loopCount}, Actions found: ${parsedActions.length}`,
-            parsedActions,
+            parsedActions.map((action) => action.type),
           );
-          console.log(
-            `[Agent Loop] Current response:`,
-            currentResponse.slice(0, 200),
-          );
+          console.log(`[Agent Loop] Current response:`, "Response received");
 
           // Check if response indicates completion (only when NO actions found)
           if (parsedActions.length === 0) {
@@ -1490,7 +1768,11 @@ export default function App() {
 
             setMessages((prev: ChatMessage[]) => [
               ...prev,
-              { role: "assistant", content: blockedOnlyMessage },
+              {
+                role: "assistant",
+                content: blockedOnlyMessage,
+                kind: "notice",
+              },
             ]);
             break;
           }
@@ -1507,10 +1789,19 @@ export default function App() {
 
           for (const action of executableActions) {
             try {
+              if (personalForRun && targetTab?.id !== undefined) {
+                privateTabsRef.current.add(targetTab.id);
+                await markPrivateBrowserTab(targetTab.id);
+                stopForReview = true;
+              }
               // All modes now use improved local DOM operations
               // (Playwright-style: auto-wait, multiple click methods, etc.)
-              const result = await executeBrowserAction(action);
-              console.log(`[Action] ${action.type} -> ${result}`);
+              const result = await executeBrowserAction(action, {
+                context,
+                frames: pageStateRef.current?.frames ?? [],
+                personal: personalForRun,
+                signal: abortControllerRef.current?.signal,
+              });
 
               actionResults.push(`• ${result}`);
               if (
@@ -1519,12 +1810,14 @@ export default function App() {
                 result.includes("error")
               ) {
                 errorCount++;
+                stopForReview = true;
               }
             } catch (error) {
               actionResults.push(
-                `• Error: ${error instanceof Error ? error.message : String(error)}`,
+                `• Error: ${redact(error instanceof Error ? error.message : String(error))}`,
               );
               errorCount++;
+              stopForReview = true;
             }
 
             // Short delay between actions (80-200ms)
@@ -1565,8 +1858,9 @@ export default function App() {
           const resultMessage = `🤖 [Loop ${loopCount}/${safeMaxAgentLoops}] ${t("executionResult", language)}\n${actionResults.join("\n")}`;
           setMessages((prev: ChatMessage[]) => [
             ...prev,
-            { role: "assistant", content: resultMessage },
+            { role: "assistant", content: resultMessage, kind: "notice" },
           ]);
+          if (stopForReview) break;
 
           if (
             shouldStopAutonomousLoopAfterFailures({
@@ -1580,6 +1874,7 @@ export default function App() {
               {
                 role: "assistant",
                 content: t("repeatedActionFailures", language),
+                kind: "notice",
               },
             ]);
             break;
@@ -1630,6 +1925,7 @@ export default function App() {
                   {
                     role: "assistant",
                     content: t("screenshotFallbackFailed", language),
+                    kind: "notice",
                   },
                 ]);
               }
@@ -1645,6 +1941,17 @@ export default function App() {
           }
 
           // Add results to conversation
+          const refreshedTab =
+            targetTab?.id !== undefined
+              ? await chrome.tabs.get(targetTab.id)
+              : undefined;
+          context.target =
+            refreshedTab?.url && refreshedTab.id !== undefined
+              ? { tabId: refreshedTab.id, url: refreshedTab.url }
+              : undefined;
+          context.pageStatus = pageStateRef.current?.status ?? "failed";
+          context.allowedActions = effectiveBrowserActions(context);
+          if (!context.allowedActions.length) break;
           conversationHistory = [
             ...conversationHistory,
             {
@@ -1662,6 +1969,7 @@ export default function App() {
               break;
             }
 
+            await assertPageShareAllowed(targetTab?.id);
             const continueResponse = await fetch(`${getBridgeBaseUrl()}/chat`, {
               method: "POST",
               headers: {
@@ -1670,8 +1978,9 @@ export default function App() {
               },
               body: JSON.stringify({
                 settings,
-                messages: conversationHistory,
-                pageContent: updatedPageContent,
+                messages: cleanMessages(conversationHistory),
+                context: cleanContext(),
+                pageContent: redact(updatedPageContent),
                 screenshot: updatedScreenshot || undefined,
                 operationMode: useScreenshotFallback
                   ? "screenshot"
@@ -1690,6 +1999,7 @@ export default function App() {
                 {
                   role: "assistant",
                   content: `${t("connectionError", language)}\n\n${continueError}`,
+                  kind: "error",
                 },
               ]);
               break;
@@ -1701,9 +2011,18 @@ export default function App() {
               break;
             }
 
+            const continuedSource = {
+              pageTitle: refreshedTab?.title || "Untitled Page",
+              pageUrl: refreshedTab?.url || "",
+            };
             setMessages((prev: ChatMessage[]) => [
               ...prev,
-              { role: "assistant", content: "" },
+              {
+                role: "assistant",
+                content: "",
+                source: continuedSource,
+                incomplete: true,
+              },
             ]);
 
             currentResponse = await readUtf8Stream(
@@ -1714,12 +2033,23 @@ export default function App() {
                   newMessages[newMessages.length - 1] = {
                     role: "assistant",
                     content,
+                    source: continuedSource,
+                    incomplete: true,
                   };
                   return newMessages;
                 });
               },
             );
 
+            setMessages((previous) =>
+              previous.map((message, index) =>
+                index === previous.length - 1 &&
+                message.role === "assistant" &&
+                !message.kind
+                  ? { ...message, content: currentResponse, incomplete: false }
+                  : message,
+              ),
+            );
             if (!currentResponse.trim()) {
               setMessages((prev: ChatMessage[]) => {
                 const newMessages = [...prev];
@@ -1731,6 +2061,7 @@ export default function App() {
                   newMessages[newMessages.length - 1] = {
                     role: "assistant",
                     content: t("emptyContinuationResponse", language),
+                    kind: "error",
                   };
                   return newMessages;
                 }
@@ -1739,6 +2070,7 @@ export default function App() {
                   {
                     role: "assistant",
                     content: t("emptyContinuationResponse", language),
+                    kind: "error",
                   },
                 ];
               });
@@ -1756,8 +2088,7 @@ export default function App() {
               console.log("Autonomous loop cancelled by user");
               break;
             }
-            console.error("Error in autonomous loop:", error);
-            // Continue loop even on error
+            throw error;
           }
         }
 
@@ -1770,13 +2101,17 @@ export default function App() {
                 "{count}",
                 String(safeMaxAgentLoops),
               ),
+              kind: "notice",
             },
           ]);
         }
       }
 
       // Execute file actions if enabled
-      if (fileOperationsEnabled) {
+      if (
+        context.fileOperationsEnabled &&
+        !abortControllerRef.current?.signal.aborted
+      ) {
         const downloadResults: string[] = [];
         const processedFileMarkers = new Set<string>();
 
@@ -1857,6 +2192,7 @@ export default function App() {
             {
               role: "assistant",
               content: `📥 ${t("downloadComplete", language)}:\n${downloadResults.join("\n")}\n\n📂 ${t("downloadDestination", language)}`,
+              kind: "notice",
             },
           ]);
         }
@@ -1866,18 +2202,27 @@ export default function App() {
         // User cancelled - don't show error
         console.log("Request cancelled by user");
       } else {
-        console.error("Error sending message:", error);
-        const detail =
-          error instanceof Error && error.message ? `\n\n${error.message}` : "";
+        if (!(error instanceof TaskBlockedError))
+          console.error("Error sending message:", error);
         setMessages((prev: ChatMessage[]) => [
           ...prev,
           {
             role: "assistant",
-            content: `${t("connectionError", language)}${detail}`,
+            content: formatChatError(error, t("connectionError", language)),
+            kind: error instanceof TaskBlockedError ? "notice" : "error",
           },
         ]);
       }
     } finally {
+      if (abortControllerRef.current?.signal.aborted) {
+        setMessages((previous) =>
+          finishStoppedConversation(
+            previous,
+            language === "ja" ? "処理を停止しました。" : "Generation stopped.",
+          ),
+        );
+      }
+      activeContentTabIdRef.current = null;
       setIsLoading(false);
       abortControllerRef.current = null;
       inFlightRequestRef.current = false;
@@ -1885,7 +2230,15 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (isLoading || !pendingPrompt) {
+    if (
+      !pendingPrompt ||
+      !canDispatchPendingAction({
+        isLoading,
+        isReadingPage,
+        isConnected,
+        contextVersion: bridgeCapabilities?.contextVersion,
+      })
+    ) {
       return;
     }
 
@@ -1900,7 +2253,17 @@ export default function App() {
     setPendingPrompt(null);
     pendingPromptTabIdRef.current = null;
     chrome.storage.local.remove("pendingAction");
-    void sendMessage(prompt).finally(() => {
+    const task = pendingTaskRef.current;
+    pendingTaskRef.current = undefined;
+    void sendMessage(
+      task?.kind === "post"
+        ? "Draft a post about the current page."
+        : task?.kind === "custom"
+          ? "Run the selected custom instruction on this page."
+          : prompt,
+      [],
+      task,
+    ).finally(() => {
       if (pendingPromptDispatchRef.current === prompt) {
         pendingPromptDispatchRef.current = null;
       }
@@ -1908,24 +2271,80 @@ export default function App() {
         activeContentTabIdRef.current = null;
       }
     });
-  }, [isLoading, pendingPrompt]);
+  }, [
+    isLoading,
+    isReadingPage,
+    isConnected,
+    bridgeCapabilities?.contextVersion,
+    pendingPrompt,
+  ]);
 
   const stopGeneration = () => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
   };
+  const settingsButtonRef = useRef<HTMLButtonElement>(null);
+  const closeSettings = () => {
+    setShowSettings(false);
+    settingsButtonRef.current?.focus();
+  };
+  const refreshPageContext = async (allowSite = false) => {
+    if (inFlightRequestRef.current || readingPageRef.current) return;
+    readingPageRef.current = true;
+    setIsReadingPage(true);
+    try {
+      if (allowSite && pageOrigin) {
+        const granted = await chrome.permissions.request({
+          origins: [`${pageOrigin}/*`],
+        });
+        if (!granted)
+          throw new TaskBlockedError(
+            language === "ja"
+              ? "サイトの許可は変更されていません。"
+              : "Site permission was not granted.",
+          );
+      }
+      if (!(await privacyReadyRef.current))
+        throw new TaskBlockedError(
+          language === "ja"
+            ? "個人情報の保護設定を読み込めませんでした。"
+            : "Privacy settings could not be loaded.",
+        );
+      const tab = (
+        await chrome.tabs.query({ active: true, currentWindow: true })
+      )[0];
+      await assertPageShareAllowed(tab?.id);
+      activeContentTabIdRef.current = tab?.id ?? null;
+      await extractPageContent({ mode: "interactive" });
+    } catch (error) {
+      setMessages((previous) => [
+        ...previous,
+        {
+          role: "assistant",
+          kind: "notice",
+          content: error instanceof Error ? error.message : "Page unavailable",
+        },
+      ]);
+    } finally {
+      activeContentTabIdRef.current = null;
+      readingPageRef.current = false;
+      setIsReadingPage(false);
+    }
+  };
 
   return (
-    <div className="flex flex-col h-full bg-gray-50">
+    <div className="flex flex-col h-full min-w-0 bg-gray-50">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-2 bg-white border-b">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 min-w-0">
           <span className="text-lg font-semibold">
             {t("appTitle", language)}
           </span>
           <span
-            className={`w-2 h-2 rounded-full ${isConnected ? "bg-green-500" : "bg-red-500"}`}
+            role="status"
+            aria-label={isConnected ? "Connected" : "Disconnected"}
+            className={`w-2 h-2 shrink-0 rounded-full ${isConnected ? "bg-green-500" : "bg-red-500"}`}
           />
         </div>
         <div className="flex items-center gap-1">
@@ -1940,6 +2359,9 @@ export default function App() {
             🔄
           </button>
           <button
+            ref={settingsButtonRef}
+            disabled={isSavingProfile}
+            aria-expanded={showSettings}
             onClick={() => setShowSettings(!showSettings)}
             className="p-2 hover:bg-gray-100 rounded"
             title={t("settings", language)}
@@ -1951,6 +2373,22 @@ export default function App() {
       </div>
 
       {/* Connection Error Banner */}
+      {pendingPrompt &&
+        !canDispatchPendingAction({
+          isLoading,
+          isReadingPage,
+          isConnected,
+          contextVersion: bridgeCapabilities?.contextVersion,
+        }) && (
+          <div
+            role="status"
+            className="px-4 py-2 text-xs bg-amber-50 text-amber-900 border-b border-amber-200"
+          >
+            {language === "ja"
+              ? "操作を待機しています。接続準備または現在の処理の完了待ちです。"
+              : "Action queued: waiting for bridge readiness or the current task."}
+          </div>
+        )}
       {!isConnected && (
         <div className="px-4 py-2 bg-red-100 text-red-700 text-sm">
           <div>{t("connectionError", language)}</div>
@@ -1992,9 +2430,29 @@ export default function App() {
       {/* Settings Panel */}
       {showSettings && (
         <Settings
+          taskRunning={isLoading}
+          onSavingProfileChange={setIsSavingProfile}
+          personalProfile={personalProfile}
+          onPersonalProfileChange={(value) => {
+            stopGeneration();
+            setProfileAuthorization("");
+            personalProfileRef.current = value;
+            setPersonalProfile(value);
+          }}
+          assistantSettings={assistantSettings}
+          onAssistantSettingsChange={(value) => {
+            if (
+              value.mode !== assistantSettings.mode ||
+              value.selectedProfileId !== assistantSettings.selectedProfileId
+            )
+              stopGeneration();
+            if (value.selectedProfileId !== assistantSettings.selectedProfileId)
+              setMessages([]);
+            setAssistantSettings(value);
+          }}
           settings={settings}
           onSettingsChange={setSettings}
-          onClose={() => setShowSettings(false)}
+          onClose={closeSettings}
           isConnected={isConnected}
           availableModels={availableModels}
           modelFetchFailed={modelFetchFailed}
@@ -2007,9 +2465,15 @@ export default function App() {
             void fetchAvailableModels();
           }}
           browserActionsEnabled={browserActionsEnabled}
-          onBrowserActionsChange={setBrowserActionsEnabled}
+          onBrowserActionsChange={(enabled) => {
+            if (!enabled) stopGeneration();
+            setBrowserActionsEnabled(enabled);
+          }}
           fileOperationsEnabled={fileOperationsEnabled}
-          onFileOperationsChange={setFileOperationsEnabled}
+          onFileOperationsChange={(enabled) => {
+            if (!enabled) stopGeneration();
+            setFileOperationsEnabled(enabled);
+          }}
           language={language}
           onLanguageChange={setLanguage}
           maxAgentLoops={maxAgentLoops}
@@ -2032,24 +2496,113 @@ export default function App() {
       )}
 
       {/* Chat Area */}
-      <Chat
-        messages={messages}
-        isLoading={isLoading}
-        onSendMessage={sendMessage}
-        onClearMessages={() => {
-          console.log("Clear messages called");
-          setMessages([]);
-        }}
-        onStopGeneration={stopGeneration}
-        language={language}
-        customPrompts={customPrompts}
-        onSaveMarkdown={() => {
-          void saveLatestAssistantMarkdown("summary");
-        }}
-        onSaveBlogDraft={() => {
-          void saveLatestAssistantMarkdown("blog-draft");
-        }}
-      />
+      <div
+        className={
+          showSettings ? "hidden" : "flex flex-col flex-1 min-h-0 min-w-0"
+        }
+      >
+        <div className="px-4 py-2 text-xs border-t bg-white flex flex-wrap gap-2 items-center">
+          <select
+            disabled={isLoading}
+            aria-label={
+              language === "ja" ? "指示プロフィール" : "Assistant profile"
+            }
+            value={assistantSettings.selectedProfileId}
+            className="border rounded p-1 min-w-0 max-w-full disabled:opacity-50"
+            onChange={(event) => {
+              stopGeneration();
+              setMessages([]);
+              setAssistantSettings({
+                ...assistantSettings,
+                selectedProfileId: event.target.value,
+              });
+            }}
+          >
+            {assistantSettings.profiles.map((profile) => (
+              <option key={profile.id} value={profile.id}>
+                {profile.name.trim() || "Profile"}
+              </option>
+            ))}
+          </select>
+          <select
+            aria-label="Browser operation"
+            className="border rounded p-1 min-w-0"
+            value={assistantSettings.mode}
+            onChange={(event) => {
+              stopGeneration();
+              setAssistantSettings({
+                ...assistantSettings,
+                mode: event.target.value as typeof assistantSettings.mode,
+              });
+            }}
+          >
+            <option value="read-only">Read only</option>
+            <option value="input">Assist with input</option>
+            <option value="automation">Browser automation</option>
+          </select>
+          {pageOrigin &&
+            Object.keys(personalValues(personalProfile)).length > 0 &&
+            assistantSettings.mode !== "read-only" && (
+              <label className="flex gap-2 items-start break-all">
+                <input
+                  type="checkbox"
+                  checked={profileAuthorization === pageOrigin}
+                  disabled={isLoading}
+                  onChange={(event) =>
+                    setProfileAuthorization(
+                      event.target.checked ? pageOrigin : "",
+                    )
+                  }
+                />
+                Use personal profile on {pageOrigin} for the next task
+              </label>
+            )}
+        </div>
+        <PageContextStatus
+          state={pageState}
+          origin={pageOrigin}
+          language={language}
+          busy={isLoading || isReadingPage}
+          reading={isReadingPage}
+          onRead={() => void refreshPageContext()}
+          onAllow={() => void refreshPageContext(true)}
+        />
+        <Chat
+          isSavingAnswer={isSavingAnswer}
+          disabledReason={
+            isReadingPage
+              ? language === "ja"
+                ? "ページ読み取り中"
+                : "Reading page..."
+              : !isConnected
+                ? language === "ja"
+                  ? "ブリッジ未接続"
+                  : "Bridge disconnected"
+                : bridgeCapabilities?.contextVersion !== 1
+                  ? language === "ja"
+                    ? "設定でブリッジの対応状況を確認してください"
+                    : "Check bridge compatibility in Settings"
+                  : undefined
+          }
+          postName={assistantSettings.post.name}
+          messages={messages}
+          isLoading={isLoading}
+          onSendMessage={sendMessage}
+          onClearMessages={() => {
+            console.log("Clear messages called");
+            setMessages([]);
+          }}
+          onStopGeneration={stopGeneration}
+          language={language}
+          customPrompts={customPrompts}
+          onSaveMarkdown={(message) =>
+            saveAssistantMarkdown("summary", message)
+          }
+          onSaveBlogDraft={(message) =>
+            saveAssistantMarkdown("blog-draft", message)
+          }
+        />
+      </div>
     </div>
   );
 }

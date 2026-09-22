@@ -1,5 +1,19 @@
 import type { Language } from "./i18n";
 
+export function canDispatchPendingAction(state: {
+  isLoading: boolean;
+  isReadingPage: boolean;
+  isConnected: boolean;
+  contextVersion?: number;
+}): boolean {
+  return (
+    !state.isLoading &&
+    !state.isReadingPage &&
+    state.isConnected &&
+    state.contextVersion === 1
+  );
+}
+
 /** ユーザーが設定画面で編集できるカスタムプロンプト1件。 */
 export interface CustomPrompt {
   id: string;

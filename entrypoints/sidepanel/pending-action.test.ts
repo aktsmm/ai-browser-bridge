@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   getPendingActionTabId,
+  canDispatchPendingAction,
   getSummarizeAndSavePrompt,
   normalizeCustomPrompts,
   pageContentInjectionGuard,
@@ -10,6 +11,37 @@ import {
 } from "./pending-action";
 
 describe("toPendingPrompt", () => {
+  it("keeps pending menu actions queued until the bridge contract is ready", () => {
+    const ready = {
+      isLoading: false,
+      isReadingPage: false,
+      isConnected: true,
+      contextVersion: 1,
+    };
+    expect(canDispatchPendingAction(ready)).toBe(true);
+    expect(canDispatchPendingAction({ ...ready, isConnected: false })).toBe(
+      false,
+    );
+    expect(
+      canDispatchPendingAction({ ...ready, contextVersion: undefined }),
+    ).toBe(false);
+    expect(canDispatchPendingAction({ ...ready, contextVersion: 0 })).toBe(
+      false,
+    );
+  });
+  it("does not consume a queued menu while another task or page read is active", () => {
+    const ready = {
+      isLoading: false,
+      isReadingPage: false,
+      isConnected: true,
+      contextVersion: 1,
+    };
+    expect(canDispatchPendingAction({ ...ready, isLoading: true })).toBe(false);
+    expect(canDispatchPendingAction({ ...ready, isReadingPage: true })).toBe(
+      false,
+    );
+    expect(canDispatchPendingAction(ready)).toBe(true);
+  });
   it("returns null for null or non-object input", () => {
     expect(toPendingPrompt(null, "ja")).toBeNull();
     expect(toPendingPrompt(undefined, "ja")).toBeNull();

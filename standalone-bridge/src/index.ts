@@ -4,6 +4,11 @@ import fs from "fs/promises";
 import http from "http";
 import path from "path";
 import { fileURLToPath } from "url";
+import {
+  buildContextInstructions,
+  isChatContext,
+  type ChatContext,
+} from "./chat-context.js";
 export type Provider =
   | "auto"
   | "copilot"
@@ -23,6 +28,7 @@ type Attachment = {
   note?: string;
 };
 type ChatRequest = {
+  context?: ChatContext;
   settings: {
     provider: Provider;
     copilot: { model: string };
@@ -333,6 +339,8 @@ function validateChatRequest(
   if (!body || typeof body !== "object")
     return { ok: false, error: "Invalid chat request body" };
   const request = body as Record<string, unknown>;
+  if (request.context !== undefined && !isChatContext(request.context))
+    return { ok: false, error: "Invalid chat context" };
   const settings = request.settings as Record<string, unknown> | undefined;
   if (!settings || typeof settings !== "object")
     return { ok: false, error: "Invalid chat settings" };
@@ -401,8 +409,9 @@ function validateChatRequest(
 export function buildSystemPrompt(
   pageContent: string,
   agentMode = false,
+  context?: ChatContext,
 ): string {
-  const actionDoc = `Use ACTION commands only when browser interaction is needed. Examples: [ACTION: click, ref:e5], [ACTION: type, ref:e5, text], [ACTION: navigate, https://example.com], [ACTION: screenshot]. Use FILE commands for artifacts: [FILE: create, output/report.md, content]. Respond in the user's language.`;
+  const actionDoc = buildContextInstructions(context, "standalone");
   if (!pageContent.trim())
     return `You are a helpful browser assistant. ${actionDoc}\n\nIf the user asks to summarize, translate, extract links, or create Q&A for the current page, clearly state that the page text was not provided. Do not infer or summarize unavailable page content. Ask the user to paste the page text, reload the page, or confirm the target URL.`;
   const page = pageContent.slice(0, agentMode ? 12_000 : 20_000);
@@ -637,6 +646,8 @@ async function chatWithLMStudio(
 }
 export class StandaloneBridgeServer {
   private server: http.Server | null = null;
+  private startPromise: Promise<void> | null = null;
+  private cancelStartup: (() => void) | null = null;
   constructor(
     private port: number,
     private version: string,
@@ -645,25 +656,46 @@ export class StandaloneBridgeServer {
     private playwrightMcpEndpoint = DEFAULT_PLAYWRIGHT_MCP_ENDPOINT,
   ) {}
   start(): Promise<void> {
+    if (this.server) return this.startPromise ?? Promise.resolve();
     this.server = http.createServer((req, res) => {
       void this.route(req, res);
     });
-    return new Promise((resolve, reject) => {
+    this.startPromise = new Promise((resolve, reject) => {
       const server = this.server;
       if (!server) return reject(new Error("Server initialization failed"));
-      server.once("listening", () => {
+      const onListening = () => {
+        server.off("error", onError);
+        if (this.server === server) this.cancelStartup = null;
         console.log(
           `AI Browser Bridge standalone: listening on http://127.0.0.1:${this.port}`,
         );
         resolve();
-      });
-      server.once("error", reject);
+      };
+      const onError = (error: Error) => {
+        server.off("listening", onListening);
+        if (this.server === server) {
+          this.server = null;
+          this.startPromise = null;
+          this.cancelStartup = null;
+        }
+        reject(error);
+      };
+      this.cancelStartup = () => {
+        server.off("listening", onListening);
+        reject(new Error("Server startup cancelled"));
+      };
+      server.once("listening", onListening);
+      server.once("error", onError);
       server.listen(this.port, "127.0.0.1");
     });
+    return this.startPromise;
   }
   stop(): void {
+    this.cancelStartup?.();
+    this.cancelStartup = null;
     this.server?.close();
     this.server = null;
+    this.startPromise = null;
   }
   private async route(
     req: http.IncomingMessage,
@@ -707,6 +739,8 @@ export class StandaloneBridgeServer {
         version: this.version,
         bridge: "standalone",
         providers: await this.capabilities(),
+        contextVersion: 1,
+        browserBackend: "extension-dom",
         recommended: { chat: "copilot-sdk", agent: "copilot-sdk" },
       });
     if (url.pathname === "/playwright/status" && req.method === "GET")
@@ -1095,7 +1129,11 @@ export class StandaloneBridgeServer {
     signal?: AbortSignal,
   ): AsyncIterable<string> {
     const agent = request.operationMode !== "text";
-    const system = buildSystemPrompt(request.pageContent, agent);
+    const system = buildSystemPrompt(
+      request.pageContent,
+      agent,
+      request.context,
+    );
     if (
       request.settings.provider === "copilot" ||
       request.settings.provider === "copilot-agent"

@@ -6,6 +6,8 @@ describe("parseBridgeCapabilities", () => {
   it("accepts the bridge capabilities response shape", () => {
     const parsed = parseBridgeCapabilities({
       version: "0.1.16",
+      contextVersion: 1,
+      browserBackend: "extension-dom",
       bridge: "standalone",
       recommended: { chat: "vscode-lm", agent: "vscode-lm" },
       providers: [
@@ -29,6 +31,8 @@ describe("parseBridgeCapabilities", () => {
     });
 
     expect(parsed?.bridge).toBe("standalone");
+    expect(parsed?.contextVersion).toBe(1);
+    expect(parsed?.browserBackend).toBe("extension-dom");
   });
 
   it("rejects malformed provider payloads instead of crashing Settings", () => {

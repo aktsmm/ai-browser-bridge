@@ -2,6 +2,10 @@
 // サイドパネルの開閉制御、コンテキストメニュー
 import { isValidDownloadId } from "./sidepanel/download-id";
 import {
+  ASSISTANT_SETTINGS_KEY,
+  normalizeAssistantSettings,
+} from "./sidepanel/assistant-settings";
+import {
   CUSTOM_PROMPTS_STORAGE_KEY,
   DEFAULT_CUSTOM_PROMPTS,
   normalizeCustomPrompts,
@@ -61,6 +65,8 @@ export type ContextMenuSpec = {
  */
 export function buildContextMenuSpecs(
   customPrompts: CustomPrompt[] = [],
+  postName?: string,
+  customPost = false,
 ): ContextMenuSpec[] {
   const specs: ContextMenuSpec[] = [
     {
@@ -75,11 +81,18 @@ export function buildContextMenuSpecs(
     },
     {
       id: POST_PARENT_MENU_ID,
-      title: "このページでポストを作成",
+      title: postName?.trim() || "このページでポストを作成",
       contexts: ["page"],
     },
   ];
 
+  if (customPost)
+    specs.push({
+      id: "postConfigured",
+      parentId: POST_PARENT_MENU_ID,
+      title: postName?.trim() || "Custom Post",
+      contexts: ["page"],
+    });
   for (const [id, { title }] of Object.entries(POST_MENU_ITEMS)) {
     specs.push({
       id,
@@ -131,6 +144,10 @@ export function buildPendingActionFromContextMenu(
       url: tab?.url,
       title: tab?.title,
     };
+  }
+
+  if (info.menuItemId === "postConfigured") {
+    return { type: "post", tabId: tab?.id, url: tab?.url, title: tab?.title };
   }
 
   if (
@@ -240,7 +257,15 @@ export default defineBackground({
       });
 
       const customPrompts = await loadCustomPrompts();
-      for (const spec of buildContextMenuSpecs(customPrompts)) {
+      const stored = await browser.storage.local.get(ASSISTANT_SETTINGS_KEY);
+      const assistant = normalizeAssistantSettings(
+        stored[ASSISTANT_SETTINGS_KEY],
+      );
+      for (const spec of buildContextMenuSpecs(
+        customPrompts,
+        assistant.post.name,
+        true,
+      )) {
         browser.contextMenus.create(spec);
       }
     };
@@ -262,7 +287,10 @@ export default defineBackground({
 
     // カスタムプロンプト変更時にメニューを再構築
     browser.storage.onChanged.addListener((changes, areaName) => {
-      if (areaName === "local" && changes[CUSTOM_PROMPTS_STORAGE_KEY]) {
+      if (
+        areaName === "local" &&
+        (changes[CUSTOM_PROMPTS_STORAGE_KEY] || changes[ASSISTANT_SETTINGS_KEY])
+      ) {
         void setupContextMenus();
       }
     });

@@ -1,9 +1,11 @@
 import React, { useState, useRef, useEffect } from "react";
+import type { TaskOptions } from "../assistant-settings";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import type { Options as RehypeSanitizeOptions } from "rehype-sanitize";
 import type { ChatMessage } from "../types";
+import { isAssistantAnswer } from "../types";
 import type { Language } from "../i18n";
 import { t } from "../i18n";
 import {
@@ -23,10 +25,25 @@ import {
 import { getDownloadShowId } from "../download-id";
 
 type QuickAction = {
+  kind?: "post";
   icon: string;
   label: string;
   prompt: string;
 };
+
+export function shouldSubmitChat(event: {
+  key: string;
+  shiftKey: boolean;
+  isComposing?: boolean;
+  keyCode?: number;
+}): boolean {
+  return (
+    event.key === "Enter" &&
+    !event.shiftKey &&
+    !event.isComposing &&
+    event.keyCode !== 229
+  );
+}
 
 export const markdownSanitizeSchema: RehypeSanitizeOptions = {
   ...defaultSchema,
@@ -38,7 +55,8 @@ export const markdownSanitizeSchema: RehypeSanitizeOptions = {
 
 export function isAssistantAlertMessage(message: ChatMessage): boolean {
   return (
-    message.role === "assistant" && message.content.trim().startsWith("⚠️")
+    message.role === "assistant" &&
+    (message.kind === "error" || message.content.trim().startsWith("⚠️"))
   );
 }
 
@@ -99,11 +117,13 @@ export function getQuickActions(
         {
           icon: "🐦",
           label: `ポスト軽（${lenLabel}）`,
+          kind: "post",
           prompt: getPostPrompt("ja", "casual", postLength),
         },
         {
           icon: "📝",
           label: `ポスト硬（${lenLabel}）`,
+          kind: "post",
           prompt: getPostPrompt("ja", "formal", postLength),
         },
       ]
@@ -135,29 +155,48 @@ export function getQuickActions(
         {
           icon: "🐦",
           label: `Post casual (${lenLabel})`,
+          kind: "post",
           prompt: getPostPrompt("en", "casual", postLength),
         },
         {
           icon: "📝",
           label: `Post formal (${lenLabel})`,
+          kind: "post",
           prompt: getPostPrompt("en", "formal", postLength),
         },
       ];
 }
 
 interface ChatProps {
+  isSavingAnswer?: boolean;
+  disabledReason?: string;
   messages: ChatMessage[];
   isLoading: boolean;
-  onSendMessage: (message: string, attachments?: ChatAttachment[]) => void;
+  onSendMessage: (
+    message: string,
+    attachments?: ChatAttachment[],
+    task?: TaskOptions,
+  ) => void;
+  postName?: string;
   onClearMessages: () => void;
   onStopGeneration: () => void;
   language: Language;
   customPrompts?: CustomPrompt[];
-  onSaveMarkdown: () => void;
-  onSaveBlogDraft: () => void;
+  onSaveMarkdown: (message: ChatMessage) => void | Promise<boolean>;
+  onSaveBlogDraft: (message: ChatMessage) => void | Promise<boolean>;
+}
+
+export function isNearConversationEnd(metrics: {
+  scrollHeight: number;
+  scrollTop: number;
+  clientHeight: number;
+}): boolean {
+  return metrics.scrollHeight - metrics.scrollTop - metrics.clientHeight <= 48;
 }
 
 export function Chat({
+  isSavingAnswer = false,
+  disabledReason,
   messages,
   isLoading,
   onSendMessage,
@@ -165,6 +204,7 @@ export function Chat({
   onStopGeneration,
   language,
   customPrompts = [],
+  postName = "Custom Post",
   onSaveMarkdown,
   onSaveBlogDraft,
 }: ChatProps) {
@@ -175,7 +215,17 @@ export function Chat({
     ChatAttachment[]
   >([]);
   const [isDragActive, setIsDragActive] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [attachmentError, setAttachmentError] = useState("");
+  const [readingAttachments, setReadingAttachments] = useState(false);
+  const readingAttachmentsRef = useRef(false);
+  const conversationRef = useRef<HTMLDivElement>(null);
+  const followLatestRef = useRef(true);
+  const [followingLatest, setFollowingLatest] = useState(true);
+  const [saveFeedback, setSaveFeedback] = useState<{
+    message: ChatMessage;
+    success: boolean;
+  } | null>(null);
+  const saveInFlightRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const copiedTimerRef = useRef<number | null>(null);
@@ -200,13 +250,14 @@ export function Chat({
   };
 
   const addFiles = async (files: FileList | File[]) => {
+    if (readingAttachmentsRef.current || isLoading) return;
     const nextFiles = Array.from(files);
     if (nextFiles.length === 0) {
       return;
     }
 
     if (pendingAttachments.length + nextFiles.length > MAX_ATTACHMENT_COUNT) {
-      window.alert(
+      setAttachmentError(
         t("attachmentLimitReached", language).replace(
           "{count}",
           String(MAX_ATTACHMENT_COUNT),
@@ -216,55 +267,72 @@ export function Chat({
     }
 
     const loadedAttachments: ChatAttachment[] = [];
+    const failures: string[] = [];
+    readingAttachmentsRef.current = true;
+    setReadingAttachments(true);
+    setAttachmentError("");
 
     for (const file of nextFiles) {
       const classified = classifyAttachmentFile(file);
       if (!classified.ok) {
-        window.alert(
-          classified.reason === "too-large"
-            ? t("attachmentTooLarge", language)
-            : t("attachmentUnsupported", language),
+        failures.push(
+          `${file.name}: ${
+            classified.reason === "too-large"
+              ? t("attachmentTooLarge", language)
+              : t("attachmentUnsupported", language)
+          }`,
         );
         continue;
       }
 
-      if (classified.kind === "text") {
-        const textContent = truncateAttachmentText(await readFileAsText(file));
+      try {
+        if (classified.kind === "text") {
+          const textContent = truncateAttachmentText(
+            await readFileAsText(file),
+          );
+          loadedAttachments.push({
+            id: `${file.name}-${file.size}-${Date.now()}-${loadedAttachments.length}`,
+            name: file.name,
+            kind: "text",
+            mimeType: file.type || "text/plain",
+            size: file.size,
+            textContent,
+          });
+          continue;
+        }
+
+        if (classified.kind === "image") {
+          const dataUrl = await readFileAsDataUrl(file);
+          loadedAttachments.push({
+            id: `${file.name}-${file.size}-${Date.now()}-${loadedAttachments.length}`,
+            name: file.name,
+            kind: "image",
+            mimeType: file.type || "image/png",
+            size: file.size,
+            dataUrl,
+          });
+          continue;
+        }
+
         loadedAttachments.push({
           id: `${file.name}-${file.size}-${Date.now()}-${loadedAttachments.length}`,
           name: file.name,
-          kind: "text",
-          mimeType: file.type || "text/plain",
+          kind: "pdf",
+          mimeType: file.type || "application/pdf",
           size: file.size,
-          textContent,
+          note: t("pdfAttachmentFallback", language),
         });
-        continue;
+      } catch {
+        failures.push(
+          `${file.name}: ${language === "ja" ? "ファイルを読み込めませんでした" : "Could not read file"}`,
+        );
       }
-
-      if (classified.kind === "image") {
-        const dataUrl = await readFileAsDataUrl(file);
-        loadedAttachments.push({
-          id: `${file.name}-${file.size}-${Date.now()}-${loadedAttachments.length}`,
-          name: file.name,
-          kind: "image",
-          mimeType: file.type || "image/png",
-          size: file.size,
-          dataUrl,
-        });
-        continue;
-      }
-
-      loadedAttachments.push({
-        id: `${file.name}-${file.size}-${Date.now()}-${loadedAttachments.length}`,
-        name: file.name,
-        kind: "pdf",
-        mimeType: file.type || "application/pdf",
-        size: file.size,
-        note: t("pdfAttachmentFallback", language),
-      });
     }
 
     setPendingAttachments((prev) => [...prev, ...loadedAttachments]);
+    setAttachmentError(failures.join("\n"));
+    readingAttachmentsRef.current = false;
+    setReadingAttachments(false);
   };
 
   const handleCopy = async (text: string, index: number) => {
@@ -278,8 +346,12 @@ export function Chat({
         setCopiedIndex(null);
         copiedTimerRef.current = null;
       }, 2000);
-    } catch (error) {
-      console.error("Failed to copy message", error);
+    } catch {
+      setAttachmentError(
+        language === "ja"
+          ? "コピーできませんでした。もう一度お試しください。"
+          : "Copy failed. Please try again.",
+      );
     }
   };
 
@@ -293,26 +365,82 @@ export function Chat({
   }, []);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (
+      messages.length === 0 ||
+      messages[messages.length - 1].role === "user"
+    ) {
+      followLatestRef.current = true;
+      setFollowingLatest(true);
+    }
+    const conversation = conversationRef.current;
+    if (
+      conversation &&
+      conversation.clientHeight > 0 &&
+      followLatestRef.current
+    ) {
+      conversation.scrollTop = conversation.scrollHeight;
+    }
   }, [messages]);
+
+  const followLatest = () => {
+    followLatestRef.current = true;
+    setFollowingLatest(true);
+    const conversation = conversationRef.current;
+    if (conversation) conversation.scrollTop = conversation.scrollHeight;
+  };
+
+  const saveAnswer = async (
+    message: ChatMessage,
+    kind: "markdown" | "blog",
+  ) => {
+    if (saveInFlightRef.current) return;
+    saveInFlightRef.current = true;
+    setSaveFeedback(null);
+    try {
+      const result = await (kind === "markdown"
+        ? onSaveMarkdown(message)
+        : onSaveBlogDraft(message));
+      if (typeof result === "boolean")
+        setSaveFeedback({ message, success: result });
+    } catch {
+      setSaveFeedback({ message, success: false });
+    } finally {
+      saveInFlightRef.current = false;
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (input.trim() && !isLoading) {
+    if (
+      input.trim() &&
+      !isLoading &&
+      !disabledReason &&
+      !readingAttachmentsRef.current
+    ) {
+      followLatest();
       onSendMessage(input, pendingAttachments);
       setInput("");
       setPendingAttachments([]);
+      setAttachmentError("");
       inputRef.current?.focus();
     }
   };
 
   const handleClear = () => {
+    followLatest();
     onClearMessages();
     inputRef.current?.focus();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (
+      shouldSubmitChat({
+        key: e.key,
+        shiftKey: e.shiftKey,
+        isComposing: e.nativeEvent.isComposing,
+        keyCode: e.nativeEvent.keyCode,
+      })
+    ) {
       e.preventDefault();
       handleSubmit(e);
     }
@@ -373,10 +501,19 @@ export function Chat({
       )}
       {/* Messages Header with Clear Button */}
       {messages.length > 0 && (
-        <div className="flex justify-end px-4 pt-2">
+        <div className="flex items-center justify-between px-4 pt-2 min-h-8 gap-2">
+          <button
+            type="button"
+            onClick={followLatest}
+            className={`text-xs text-blue-700 underline focus-visible:ring-2 focus-visible:ring-blue-500 ${followingLatest ? "invisible" : ""}`}
+            tabIndex={followingLatest ? -1 : 0}
+          >
+            {language === "ja" ? "最新の応答へ" : "Jump to latest"}
+          </button>
           <button
             onClick={handleClear}
-            className="text-xs text-gray-500 hover:text-red-500 flex items-center gap-1"
+            disabled={isLoading || isSavingAnswer}
+            className="text-xs text-gray-500 hover:text-red-500 disabled:opacity-40 flex items-center gap-1"
             title={t("clear", language)}
             aria-label={t("clear", language)}
           >
@@ -386,7 +523,18 @@ export function Chat({
       )}
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div
+        ref={conversationRef}
+        role="region"
+        aria-label={language === "ja" ? "会話履歴" : "Conversation"}
+        tabIndex={0}
+        onScroll={(event) => {
+          const nearEnd = isNearConversationEnd(event.currentTarget);
+          followLatestRef.current = nearEnd;
+          setFollowingLatest(nearEnd);
+        }}
+        className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4 focus-visible:outline-blue-500"
+      >
         {messages.length === 0 && (
           <div className="mt-6 px-2">
             <p className="text-2xl text-center mb-1">
@@ -472,6 +620,7 @@ export function Chat({
               ).map((card) => (
                 <button
                   key={card.label}
+                  disabled={Boolean(disabledReason)}
                   onClick={() => onSendMessage(card.prompt)}
                   className="flex items-center gap-2 p-3 rounded-lg border border-gray-200 bg-white hover:bg-blue-50 hover:border-blue-300 transition-all text-left text-sm shadow-sm"
                 >
@@ -493,18 +642,32 @@ export function Chat({
               className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
             >
               <div
-                role={isAlertMessage ? "alert" : undefined}
-                aria-live={isAlertMessage ? "polite" : undefined}
+                role={
+                  isAlertMessage
+                    ? "alert"
+                    : message.kind === "notice"
+                      ? "status"
+                      : undefined
+                }
+                aria-live={
+                  isAlertMessage || message.kind === "notice"
+                    ? "polite"
+                    : undefined
+                }
                 className={`max-w-[85%] p-3 rounded-lg relative group ${
                   message.role === "user"
                     ? "bg-blue-600 text-white"
-                    : "bg-white border shadow-sm"
+                    : message.kind === "error"
+                      ? "bg-red-50 border border-red-200"
+                      : message.kind === "notice"
+                        ? "bg-amber-50 border border-amber-200"
+                        : "bg-white border shadow-sm"
                 }`}
               >
-                {message.role === "assistant" && (
+                {isAssistantAnswer(message) && (
                   <button
                     onClick={() => handleCopy(message.content, index)}
-                    className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity text-xs px-1.5 py-0.5 rounded bg-gray-100 hover:bg-gray-200 text-gray-600"
+                    className="absolute top-1 right-1 opacity-100 transition-opacity text-xs px-1.5 py-0.5 rounded bg-gray-100 hover:bg-gray-200 text-gray-600 focus-visible:ring-2 focus-visible:ring-blue-500"
                     title={t("copy", language)}
                     aria-label={t("copy", language)}
                   >
@@ -512,8 +675,15 @@ export function Chat({
                   </button>
                 )}
                 <div
-                  className={`break-words ${message.role === "user" ? "whitespace-pre-wrap" : "markdown-body"}`}
+                  className={`break-words ${isAssistantAnswer(message) ? "pt-5" : ""} ${message.role === "user" ? "whitespace-pre-wrap" : "markdown-body"}`}
                 >
+                  {message.incomplete && !isLoading && (
+                    <div className="text-xs text-amber-800 mb-2">
+                      {language === "ja"
+                        ? "中断した部分回答"
+                        : "Partial response"}
+                    </div>
+                  )}
                   {message.role === "assistant" ? (
                     <ReactMarkdown
                       remarkPlugins={[remarkGfm]}
@@ -562,7 +732,7 @@ export function Chat({
 
                   {/* Quick actions at end of latest assistant message */}
                   {!isLoading &&
-                    message.role === "assistant" &&
+                    isAssistantAnswer(message) &&
                     index === messages.length - 1 && (
                       <div className="mt-3 pt-2 border-t border-gray-200 flex flex-wrap gap-2">
                         <button
@@ -590,7 +760,21 @@ export function Chat({
                         {getQuickActions(language, postLength).map((action) => (
                           <button
                             key={action.label}
-                            onClick={() => onSendMessage(action.prompt)}
+                            disabled={Boolean(disabledReason)}
+                            onClick={() =>
+                              onSendMessage(
+                                action.kind === "post"
+                                  ? "Draft a post about the current page."
+                                  : action.prompt,
+                                [],
+                                action.kind
+                                  ? {
+                                      kind: action.kind,
+                                      instructions: action.prompt,
+                                    }
+                                  : undefined,
+                              )
+                            }
                             className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200 text-gray-700"
                           >
                             <span className="mr-1">{action.icon}</span>
@@ -605,37 +789,104 @@ export function Chat({
                           .map((prompt) => (
                             <button
                               key={prompt.id}
-                              onClick={() => onSendMessage(prompt.body)}
+                              disabled={Boolean(disabledReason)}
+                              onClick={() =>
+                                onSendMessage(prompt.name, [], {
+                                  kind: "custom",
+                                  instructions: prompt.body,
+                                })
+                              }
                               className="text-xs px-2 py-1 rounded bg-purple-100 hover:bg-purple-200 text-purple-800"
                             >
                               <span className="mr-1">✨</span>
                               {prompt.name}
                             </button>
                           ))}
-                        <button
-                          onClick={onSaveMarkdown}
-                          className="text-xs px-2 py-1 rounded bg-blue-100 hover:bg-blue-200 text-blue-800"
-                        >
-                          💾 {t("saveMarkdownAction", language)}
-                        </button>
-                        <button
-                          onClick={onSaveBlogDraft}
-                          className="text-xs px-2 py-1 rounded bg-amber-100 hover:bg-amber-200 text-amber-800"
-                        >
-                          📝 {t("saveBlogDraftAction", language)}
-                        </button>
                       </div>
                     )}
+                  {isAssistantAnswer(message) && (
+                    <div
+                      role="group"
+                      aria-label={
+                        language === "ja" ? "回答の保存" : "Save answer"
+                      }
+                      aria-busy={isSavingAnswer}
+                      className="mt-2 pt-2 border-t flex flex-wrap gap-3 text-xs"
+                    >
+                      <button
+                        type="button"
+                        disabled={isLoading || isSavingAnswer}
+                        onClick={() => void saveAnswer(message, "markdown")}
+                        className="text-blue-700 underline disabled:opacity-40"
+                      >
+                        {t("saveMarkdownAction", language)}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isLoading || isSavingAnswer}
+                        onClick={() => void saveAnswer(message, "blog")}
+                        className="text-blue-700 underline disabled:opacity-40"
+                      >
+                        {t("saveBlogDraftAction", language)}
+                      </button>
+                    </div>
+                  )}
+                  {saveFeedback?.message === message && (
+                    <div
+                      role="status"
+                      className={`mt-1 text-xs ${saveFeedback.success ? "text-green-700" : "text-red-700"}`}
+                    >
+                      {saveFeedback.success
+                        ? language === "ja"
+                          ? "保存しました"
+                          : "Saved"
+                        : language === "ja"
+                          ? "保存できませんでした"
+                          : "Save failed"}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
           );
         })}
-        <div ref={messagesEndRef} />
       </div>
 
       {/* Input */}
       <form onSubmit={handleSubmit} className="p-4 bg-white border-t">
+        {disabledReason && (
+          <div role="status" className="mb-2 text-xs text-gray-600 break-words">
+            {disabledReason}
+          </div>
+        )}
+        {attachmentError && (
+          <div
+            role="alert"
+            className="mb-2 text-sm text-red-700 whitespace-pre-wrap break-words"
+          >
+            {attachmentError}
+          </div>
+        )}
+        {readingAttachments && (
+          <div role="status" className="mb-2 text-xs text-gray-600">
+            {language === "ja"
+              ? "添付ファイルを読み込み中…"
+              : "Reading attachments..."}
+          </div>
+        )}
+        <button
+          type="button"
+          disabled={isLoading || Boolean(disabledReason) || readingAttachments}
+          className="mb-2 text-sm text-blue-700 break-words disabled:opacity-40"
+          onClick={() =>
+            onSendMessage("Draft a post about the current page.", [], {
+              kind: "post",
+              instructions: getPostPrompt(language),
+            })
+          }
+        >
+          {postName}
+        </button>
         {pendingAttachments.length > 0 && (
           <div className="mb-3 rounded border border-gray-200 bg-gray-50 p-3">
             <div className="mb-2 text-xs font-medium text-gray-600">
@@ -654,7 +905,7 @@ export function Chat({
                         ? "📄"
                         : "📎"}
                   </span>
-                  <span>{attachment.name}</span>
+                  <span className="min-w-0 break-all">{attachment.name}</span>
                   <button
                     type="button"
                     onClick={() =>
@@ -699,6 +950,7 @@ export function Chat({
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
+            disabled={isLoading || readingAttachments}
             className="px-3 py-2 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
             title={t("dropFilesHere", language)}
             aria-label={t("attachFiles", language)}
@@ -713,7 +965,7 @@ export function Chat({
             placeholder={t("inputPlaceholder", language)}
             aria-label={t("inputPlaceholder", language)}
             rows={1}
-            className="flex-1 p-2 border rounded resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="flex-1 min-w-0 p-2 border rounded resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
           {isLoading ? (
             <button
@@ -728,12 +980,15 @@ export function Chat({
           ) : (
             <button
               type="submit"
-              disabled={!input.trim()}
+              disabled={
+                !input.trim() || Boolean(disabledReason) || readingAttachments
+              }
               className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
               title={
-                !input.trim()
+                disabledReason ||
+                (!input.trim()
                   ? t("inputPlaceholder", language)
-                  : t("send", language)
+                  : t("send", language))
               }
               aria-label={t("send", language)}
             >

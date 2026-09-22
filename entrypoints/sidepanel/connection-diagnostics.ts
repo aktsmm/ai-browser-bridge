@@ -1,3 +1,15 @@
+export class TaskBlockedError extends Error {}
+
+export function formatChatError(
+  error: unknown,
+  connectionMessage: string,
+): string {
+  if (error instanceof TaskBlockedError) return error.message;
+  const detail =
+    error instanceof Error && error.message ? `\n\n${error.message}` : "";
+  return `${connectionMessage}${detail}`;
+}
+
 export function formatConnectionFailureDetail(options: {
   port: number;
   error?: string;
@@ -23,4 +35,3 @@ export function formatConnectionFailureDetail(options: {
       : "Connection failed";
   return `${base}\nCheck that the VS Code extension or standalone bridge is running and listening on ${endpoint}.`;
 }
-

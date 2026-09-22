@@ -3,6 +3,12 @@ import { BRIDGE_CLIENT_HEADERS } from "./constants";
 import { normalizeServerPort } from "./server-port";
 import { normalizeDownloadRelativePath } from "./save-path";
 import { getEvaluateBlockedMessage } from "./evaluate-policy";
+import {
+  browserActionAllowed,
+  executeBoundBrowserAction,
+  type BrowserSession,
+} from "./browser-execution";
+import { BROWSER_ACTIONS } from "../../standalone-bridge/src/chat-context";
 
 // Playwright MCP availability flag (kept for future integration)
 let playwrightAvailable = false;
@@ -17,6 +23,7 @@ type BrowserTab = {
   id?: number;
   url?: string;
   windowId?: number;
+  active?: boolean;
 };
 
 function resolveScriptResultMessage(result: unknown, fallback: string): string {
@@ -309,8 +316,13 @@ async function ensureClientLoggers(): Promise<void> {
 
 export async function executeBrowserAction(
   action: BrowserAction,
+  session: BrowserSession,
 ): Promise<string> {
   try {
+    if (!session || !browserActionAllowed(action, session.context))
+      return "Error: browser action is not authorized";
+    if ((BROWSER_ACTIONS as readonly string[]).includes(action.type))
+      return await executeBoundBrowserAction(action, session);
     await ensureClientLoggers();
     switch (action.type) {
       case "navigate":
@@ -808,11 +820,19 @@ async function takeScreenshot(): Promise<string> {
 }
 
 // Export screenshot capture for Vision API
-export async function captureScreenshot(): Promise<string> {
+export async function captureScreenshot(targetTabId?: number): Promise<string> {
   try {
-    const dataUrl = await chrome.tabs.captureVisibleTab({
+    const tab =
+      targetTabId !== undefined
+        ? await chrome.tabs.get(targetTabId)
+        : await getCurrentTab();
+    if (!tab.active || tab.windowId === undefined) return "";
+    const beforeUrl = tab.url;
+    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
       format: "png",
     });
+    const after = await chrome.tabs.get(tab.id!);
+    if (!after.active || after.url !== beforeUrl) return "";
     // Return full data URL (let the server handle parsing)
     return dataUrl;
   } catch (error) {
@@ -2438,10 +2458,15 @@ export async function checkPlaywrightAvailable(): Promise<boolean> {
 // Execute with fallback: try local DOM first, then Playwright (or vice versa if preferPlaywright)
 export async function executeWithFallback(
   action: BrowserAction,
+  session?: BrowserSession,
 ): Promise<string> {
   if (action.type === "evaluate" && !allowEvaluateAction) {
     return EVALUATE_DISABLED_MESSAGE;
   }
+
+  if (!session) return "Error: a verified browser session is required";
+  if (session.context.version === 1)
+    return executeBrowserAction(action, session);
 
   const allowInternalEvaluate = action.type !== "playwright";
 
@@ -2573,7 +2598,7 @@ export async function executeWithFallback(
   }
 
   // Try local DOM execution
-  const localResult = await executeBrowserAction(action);
+  const localResult = await executeBrowserAction(action, session);
 
   // Check if local execution failed (includes "not found", "Error:", "failed")
   const isError = isExecutionFailure(action, localResult);

@@ -1,0 +1,98 @@
+import {
+  BROWSER_ACTIONS,
+  effectiveBrowserActions,
+  type ChatContext,
+  type TaskMode,
+} from "../../standalone-bridge/src/chat-context";
+
+export const ASSISTANT_SETTINGS_KEY = "assistantSettingsV1";
+export interface AssistantProfile {
+  id: string;
+  name: string;
+  instructions: string;
+}
+export interface AssistantSettings {
+  version: 1;
+  globalInstructions: string;
+  profiles: AssistantProfile[];
+  selectedProfileId: string;
+  mode: TaskMode;
+  post: { name: string; instructions: string };
+}
+export interface TaskOptions {
+  kind: "post" | "custom" | "summary";
+  instructions?: string;
+}
+
+function boundedText(value: unknown, limit: number): string {
+  return typeof value === "string" ? value.slice(0, limit) : "";
+}
+
+export function normalizeAssistantSettings(value: unknown): AssistantSettings {
+  const stored =
+    value && typeof value === "object"
+      ? (value as Partial<AssistantSettings>)
+      : {};
+  const usedIds = new Set<string>();
+  const profiles: AssistantProfile[] = [];
+  if (Array.isArray(stored.profiles)) {
+    for (const candidate of stored.profiles.slice(0, 12)) {
+      if (!candidate || typeof candidate !== "object") continue;
+      const id = boundedText(candidate.id, 80);
+      if (!id || usedIds.has(id)) continue;
+      usedIds.add(id);
+      profiles.push({
+        id,
+        name: boundedText(candidate.name, 80) || "Profile",
+        instructions: boundedText(candidate.instructions, 8000),
+      });
+    }
+  }
+  if (!profiles.length)
+    profiles.push({ id: "default", name: "Default", instructions: "" });
+  return {
+    version: 1,
+    globalInstructions: boundedText(stored.globalInstructions, 8000),
+    profiles,
+    selectedProfileId: profiles.some(
+      (profile) => profile.id === stored.selectedProfileId,
+    )
+      ? stored.selectedProfileId!
+      : profiles[0].id,
+    mode:
+      stored.mode === "input" || stored.mode === "automation"
+        ? stored.mode
+        : "read-only",
+    post: {
+      name: boundedText(stored.post?.name, 80) || "Custom Post",
+      instructions: boundedText(stored.post?.instructions, 8000),
+    },
+  };
+}
+
+export function buildChatContext(
+  settings: AssistantSettings,
+  target: ChatContext["target"],
+  pageStatus: ChatContext["pageStatus"],
+  task?: TaskOptions,
+  browserActionsEnabled = true,
+): ChatContext {
+  const context: ChatContext = {
+    version: 1,
+    mode: task || !browserActionsEnabled ? "read-only" : settings.mode,
+    allowedActions: [...BROWSER_ACTIONS],
+    globalInstructions: settings.globalInstructions,
+    profileInstructions:
+      settings.profiles.find(
+        (profile) => profile.id === settings.selectedProfileId,
+      )?.instructions ?? "",
+    taskInstructions:
+      task?.kind === "post" && settings.post.instructions.trim()
+        ? settings.post.instructions
+        : (task?.instructions ?? ""),
+    target,
+    pageStatus,
+  };
+  context.allowedActions = effectiveBrowserActions(context);
+  return context;
+}

@@ -1,3 +1,21 @@
+import type { ChatMessage } from "./types";
+
+export function finishStoppedConversation(
+  messages: readonly ChatMessage[],
+  notice: string,
+): ChatMessage[] {
+  const result = [...messages];
+  const last = result[result.length - 1];
+  if (last?.role === "assistant" && !last.kind) {
+    if (!last.content.trim()) result.pop();
+    else result[result.length - 1] = { ...last, incomplete: true };
+  }
+  if (last?.kind !== "notice" || last.content !== notice) {
+    result.push({ role: "assistant", kind: "notice", content: notice });
+  }
+  return result;
+}
+
 export type ReadableTextReader = Pick<
   ReadableStreamDefaultReader<Uint8Array>,
   "read" | "cancel"

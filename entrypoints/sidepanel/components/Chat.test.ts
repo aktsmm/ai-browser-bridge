@@ -7,10 +7,122 @@ import {
   getQuickActions,
   isAssistantAlertMessage,
   markdownSanitizeSchema,
+  shouldSubmitChat,
+  isNearConversationEnd,
 } from "./Chat";
 import { getDownloadShowId } from "../download-id";
+import { isAssistantAnswer } from "../types";
 
 describe("getQuickActions", () => {
+  it("offers saving on each answer even after a later reply or notice", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(Chat, {
+        messages: [
+          { role: "assistant", content: "Earlier answer" },
+          { role: "assistant", content: "Later answer" },
+          { role: "assistant", kind: "notice", content: "Saved" },
+        ],
+        isLoading: false,
+        onSendMessage: vi.fn(),
+        onClearMessages: vi.fn(),
+        onStopGeneration: vi.fn(),
+        language: "en",
+        onSaveMarkdown: vi.fn(),
+        onSaveBlogDraft: vi.fn(),
+      }),
+    );
+    expect(html.match(/aria-label="Save answer"/g)).toHaveLength(2);
+  });
+  it("follows new content only when the reader is near the conversation end", () => {
+    expect(
+      isNearConversationEnd({
+        scrollHeight: 1000,
+        scrollTop: 400,
+        clientHeight: 600,
+      }),
+    ).toBe(true);
+    expect(
+      isNearConversationEnd({
+        scrollHeight: 1000,
+        scrollTop: 352,
+        clientHeight: 600,
+      }),
+    ).toBe(true);
+    expect(
+      isNearConversationEnd({
+        scrollHeight: 1000,
+        scrollTop: 351,
+        clientHeight: 600,
+      }),
+    ).toBe(false);
+    expect(
+      isNearConversationEnd({
+        scrollHeight: 1000,
+        scrollTop: 0,
+        clientHeight: 600,
+      }),
+    ).toBe(false);
+  });
+  it("never treats runtime notices or empty responses as savable answers", () => {
+    expect(
+      isAssistantAnswer({
+        role: "assistant",
+        kind: "notice",
+        content: "Saved",
+      }),
+    ).toBe(false);
+    expect(
+      isAssistantAnswer({
+        role: "assistant",
+        kind: "error",
+        content: "Failed",
+      }),
+    ).toBe(false);
+    expect(isAssistantAnswer({ role: "assistant", content: "  " })).toBe(false);
+    expect(isAssistantAnswer({ role: "assistant", content: "Answer" })).toBe(
+      true,
+    );
+  });
+  it("does not submit while confirming IME composition or adding a newline", () => {
+    expect(
+      shouldSubmitChat({ key: "Enter", shiftKey: false, isComposing: true }),
+    ).toBe(false);
+    expect(
+      shouldSubmitChat({ key: "Enter", shiftKey: false, keyCode: 229 }),
+    ).toBe(false);
+    expect(shouldSubmitChat({ key: "Enter", shiftKey: true })).toBe(false);
+    expect(shouldSubmitChat({ key: "Enter", shiftKey: false })).toBe(true);
+  });
+  it.each(["notice", "error"] as const)(
+    "does not offer answer actions on a %s",
+    (kind) => {
+      const html = renderToStaticMarkup(
+        React.createElement(Chat, {
+          messages: [
+            {
+              role: "assistant",
+              content: "Task stopped before sending.",
+              kind,
+            },
+          ],
+          isLoading: false,
+          onSendMessage: vi.fn(),
+          onClearMessages: vi.fn(),
+          onStopGeneration: vi.fn(),
+          language: "en",
+          onSaveMarkdown: vi.fn(),
+          onSaveBlogDraft: vi.fn(),
+        }),
+      );
+      expect(html).toContain(
+        kind === "error" ? 'role="alert"' : 'role="status"',
+      );
+      expect(html).not.toContain("Save this answer");
+      expect(html).not.toContain("Continue</button>");
+      expect(html).not.toContain('aria-label="Copy"');
+      expect(html).toContain('aria-label="Send"');
+    },
+  );
   it("uses grounded, non-navigating Japanese prompts", () => {
     const prompts = getQuickActions("ja").map((action) => action.prompt);
 

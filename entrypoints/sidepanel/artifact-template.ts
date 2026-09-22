@@ -1,4 +1,5 @@
 import { normalizeDownloadRelativePath } from "./save-path";
+import { isAssistantAnswer, type ChatMessage } from "./types";
 
 function pad(value: number): string {
   return String(value).padStart(2, "0");
@@ -28,12 +29,16 @@ export function buildArtifactRelativePath(
   title: string,
   kind: "summary" | "blog-draft",
   createdAt = new Date(),
+  saveId = "",
 ): string {
-  const slug = slugifyArtifactSegment(title);
+  const slug = slugifyArtifactSegment(title).slice(0, 80).replace(/-+$/, "");
   const datePart = formatDateStamp(createdAt);
   const timePart = formatTimeStamp(createdAt);
+  const suffix = saveId
+    ? `-${slugifyArtifactSegment(saveId).slice(0, 36)}`
+    : "";
   return normalizeDownloadRelativePath(
-    `${basePath}/${datePart}-${slug}-${kind}-${timePart}.md`,
+    `${basePath}/${datePart}-${slug}-${kind}-${timePart}${suffix}.md`,
   );
 }
 
@@ -42,6 +47,21 @@ interface ArtifactContentInput {
   pageUrl: string;
   assistantContent: string;
   createdAt: Date;
+  incomplete?: boolean;
+}
+
+export function getAnswerArtifactInput(
+  message: ChatMessage,
+  createdAt = new Date(),
+): ArtifactContentInput | null {
+  if (!isAssistantAnswer(message)) return null;
+  return {
+    pageTitle: message.source?.pageTitle || "Untitled Page",
+    pageUrl: message.source?.pageUrl || "",
+    assistantContent: message.content.trim(),
+    incomplete: message.incomplete === true,
+    createdAt,
+  };
 }
 
 export function buildSavedMarkdownContent({
@@ -49,11 +69,15 @@ export function buildSavedMarkdownContent({
   pageUrl,
   assistantContent,
   createdAt,
+  incomplete,
 }: ArtifactContentInput): string {
   return [
     `# ${pageTitle || "Untitled Page"}`,
     "",
     `- Saved At: ${createdAt.toISOString()}`,
+    ...(incomplete
+      ? ["- Response status: Partial (generation interrupted)"]
+      : []),
     `- Source URL: ${pageUrl || "(unknown)"}`,
     "",
     "## Summary",
@@ -71,11 +95,15 @@ export function buildBlogDraftContent({
   pageUrl,
   assistantContent,
   createdAt,
+  incomplete,
 }: ArtifactContentInput): string {
   return [
     `# Blog Draft: ${pageTitle || "Untitled Page"}`,
     "",
     `- Drafted At: ${createdAt.toISOString()}`,
+    ...(incomplete
+      ? ["- Response status: Partial (generation interrupted)"]
+      : []),
     `- Source URL: ${pageUrl || "(unknown)"}`,
     "",
     "## Angle",

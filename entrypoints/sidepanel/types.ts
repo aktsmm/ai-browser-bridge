@@ -21,6 +21,18 @@ export interface LLMSettings {
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+  kind?: "notice" | "error";
+  source?: { pageTitle: string; pageUrl: string };
+  incomplete?: boolean;
+}
+
+export function isAssistantAnswer(message: ChatMessage): boolean {
+  return (
+    message.role === "assistant" &&
+    !message.kind &&
+    Boolean(message.content.trim()) &&
+    !message.content.trim().startsWith("⚠️")
+  );
 }
 
 export interface ChatRequest {
@@ -55,6 +67,8 @@ export interface BridgeProviderCapability {
 }
 
 export interface BridgeCapabilities {
+  contextVersion?: number;
+  browserBackend?: "extension-dom";
   version: string;
   bridge?: "vscode" | "standalone";
   providers: BridgeProviderCapability[];
