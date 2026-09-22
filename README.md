@@ -182,17 +182,17 @@ Updated for version 0.1.23 (2026-09-22). AI Browser Bridge processes information
 
 ### Permission Usage
 
-| Permission       | Purpose                                                         |
-| ---------------- | --------------------------------------------------------------- |
-| activeTab        | Get current page content                                        |
-| tabs             | Get tab info (URL, title)                                       |
-| scripting        | Analyze page DOM elements                                       |
-| storage          | Save settings, instructions, optional personal profile and privacy state |
-| sidePanel        | Display chat UI                                                 |
-| host_permissions | Limit the placeholder content script to local development pages |
-| optional_host_permissions | User-approved access to an individual site's page content and DOM |
-| contextMenus | Run selected page tasks from the context menu |
-| downloads | Save answers requested by the user |
+| Permission                | Purpose                                                                  |
+| ------------------------- | ------------------------------------------------------------------------ |
+| activeTab                 | Get current page content                                                 |
+| tabs                      | Get tab info (URL, title)                                                |
+| scripting                 | Analyze page DOM elements                                                |
+| storage                   | Save settings, instructions, optional personal profile and privacy state |
+| sidePanel                 | Display chat UI                                                          |
+| host_permissions          | Limit the placeholder content script to local development pages          |
+| optional_host_permissions | User-approved access to an individual site's page content and DOM        |
+| contextMenus              | Run selected page tasks from the context menu                            |
+| downloads                 | Save answers requested by the user                                       |
 
 Static host access is limited to loopback endpoints. Page reading requires a valid temporary `activeTab` grant or explicit optional permission for that site; keeping the sidepanel open does not itself grant access to every selected tab. Context is sent to the local bridge and then the selected model provider.
 

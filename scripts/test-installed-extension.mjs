@@ -19,7 +19,9 @@ const { chromium } = await import(
     : "playwright"
 );
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const extension = path.resolve(values["extension-dir"] || path.join(root, ".output/chrome-mv3"));
+const extension = path.resolve(
+  values["extension-dir"] || path.join(root, ".output/chrome-mv3"),
+);
 const output = path.resolve(
   values["output-dir"] ||
     path.join(root, ".output/installed-extension-evidence"),
