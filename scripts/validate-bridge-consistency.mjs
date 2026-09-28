@@ -85,9 +85,13 @@ async function main() {
     );
   }
 
-  if (wxtConfigSource.includes('host_permissions: ["<all_urls>"]')) {
+  if (
+    wxtConfigSource.includes('"<all_urls>"') ||
+    !wxtConfigSource.includes('"https://*/*"') ||
+    !wxtConfigSource.includes('"http://*/*"')
+  ) {
     failures.push(
-      "wxt.config.ts must not request broad <all_urls> host permissions",
+      "wxt.config.ts must grant HTTP(S) page access without including protected schemes",
     );
   }
 

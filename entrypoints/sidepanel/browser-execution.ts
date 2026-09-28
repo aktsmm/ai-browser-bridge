@@ -11,6 +11,82 @@ export interface BrowserSession {
   signal?: AbortSignal;
 }
 
+interface DisplayEdit {
+  url: string;
+  documentId: string;
+  changes: { marker: string; previousText: string; replacementText: string }[];
+}
+const displayEdits = new Map<number, DisplayEdit[]>();
+
+export function forgetDisplayEdits(tabId: number): void {
+  displayEdits.delete(tabId);
+}
+
+export function hasUndoableDisplayEdit(tabId: number): boolean {
+  return Boolean(displayEdits.get(tabId)?.length);
+}
+
+export async function undoLastDisplayEdit(tabId: number): Promise<boolean> {
+  const edits = displayEdits.get(tabId);
+  const edit = edits?.at(-1);
+  if (!edit) return false;
+  try {
+    if ((await chrome.tabs.get(tabId)).url !== edit.url) {
+      displayEdits.delete(tabId);
+      return false;
+    }
+    const result = await chrome.scripting.executeScript({
+      target: { tabId, documentIds: [edit.documentId] },
+      func: (changes: DisplayEdit["changes"]) => {
+        const roots: (Document | ShadowRoot)[] = [document];
+        for (
+          let index = 0;
+          index < roots.length && roots.length < 100;
+          index++
+        ) {
+          roots[index].querySelectorAll("*").forEach((element) => {
+            if (element.shadowRoot && roots.length < 100)
+              roots.push(element.shadowRoot);
+          });
+        }
+        const targets = changes.map((change) =>
+          roots.flatMap((root) =>
+            Array.from(
+              root.querySelectorAll(
+                `[data-copilot-edit-id="${change.marker}"]`,
+              ),
+            ),
+          ),
+        );
+        if (
+          targets.some(
+            (elements, index) =>
+              elements.length !== 1 ||
+              elements[0].textContent !== changes[index].replacementText,
+          )
+        )
+          return false;
+        targets.forEach((elements, index) => {
+          elements[0].textContent = changes[index].previousText;
+          elements[0].removeAttribute("data-copilot-edit-id");
+        });
+        return true;
+      },
+      args: [edit.changes],
+    });
+    if (!result[0]?.result) {
+      displayEdits.delete(tabId);
+      return false;
+    }
+    edits!.pop();
+    if (!edits!.length) displayEdits.delete(tabId);
+    return true;
+  } catch {
+    displayEdits.delete(tabId);
+    return false;
+  }
+}
+
 export function parseFrameReference(selector: string): {
   frameId: number;
   selector: string;
@@ -26,9 +102,42 @@ export function browserActionAllowed(
   context: ChatContext,
 ): boolean {
   if (!effectiveBrowserActions(context).includes(action.type)) return false;
+  if (action.type === "replaceText") {
+    const edits = "edits" in action ? action.edits : [action];
+    if (
+      !Array.isArray(edits) ||
+      !edits.length ||
+      edits.length > 10 ||
+      edits.some(
+        (edit) =>
+          typeof edit.selector !== "string" ||
+          !/^(?:ref:)?(?:f\d+:)?e\d+$/i.test(edit.selector) ||
+          typeof edit.text !== "string" ||
+          !edit.text ||
+          edit.text.length > 500 ||
+          /[\r\n]/.test(edit.text),
+      )
+    )
+      return false;
+  }
   if (action.type === "type" && (action.submit || /[\r\n]/.test(action.text)))
     return false;
   return true;
+}
+
+export function actionUsesPersonalProfile(
+  action: BrowserAction,
+  personal?: Record<string, string>,
+): boolean {
+  const usesValue = (value: string) =>
+    value.includes("{{profile.") ||
+    Object.values(personal ?? {}).some(
+      (profileValue) => profileValue.length > 0 && value === profileValue,
+    );
+  if (action.type === "type") return usesValue(action.text);
+  if (action.type === "fillForm")
+    return action.fields.some((field) => usesValue(field.value));
+  return false;
 }
 
 export function resolveProfileValue(
@@ -37,7 +146,7 @@ export function resolveProfileValue(
 ): string {
   if (!value.includes("{{profile.")) return value;
   const match = value.match(
-    /^\{\{profile\.(fullName|email|phone|postalCode|address)\}\}$/,
+    /^\{\{profile\.(fullName|email|phone|postalCode|address|custom[1-5])\}\}$/,
   );
   if (!match || !personal?.[match[1]])
     throw new Error("Personal field is not authorized for this task");
@@ -94,6 +203,21 @@ export async function executeBoundBrowserAction(
     frameId = reference.frameId;
     prepared = { ...action, selector: reference.selector };
   }
+  if (action.type === "replaceText" && "edits" in action) {
+    const references = action.edits.map((edit) =>
+      parseFrameReference(edit.selector),
+    );
+    frameId = references[0]?.frameId ?? 0;
+    if (references.some((reference) => reference.frameId !== frameId))
+      return "Error: edit one frame per action";
+    prepared = {
+      type: "replaceText",
+      edits: action.edits.map((edit, index) => ({
+        selector: references[index].selector,
+        text: edit.text,
+      })),
+    };
+  }
   if (prepared.type === "type")
     prepared = {
       ...prepared,
@@ -123,9 +247,10 @@ export async function executeBoundBrowserAction(
   if (session.personal && frame?.origin !== new URL(target.url).origin)
     return "Error: personal-profile authorization does not include this frame origin";
   if (session.signal?.aborted) return "Error: task cancelled";
+  const editId = prepared.type === "replaceText" ? crypto.randomUUID() : "";
   const results = await chrome.scripting.executeScript({
     target: { tabId: target.tabId, documentIds: [documentId] },
-    func: async (command: BrowserAction) => {
+    func: async (command: BrowserAction, editId: string) => {
       const roots: (Document | ShadowRoot)[] = [document];
       for (
         let rootIndex = 0;
@@ -261,6 +386,64 @@ export async function executeBoundBrowserAction(
       }
       if (command.type === "getHtml")
         return "Page context is provided by the next snapshot";
+      if (command.type === "replaceText") {
+        const edits = "edits" in command ? command.edits : [command];
+        const allowed = [
+          "H1",
+          "H2",
+          "H3",
+          "H4",
+          "P",
+          "SPAN",
+          "DIV",
+          "TD",
+          "TH",
+          "LI",
+          "STRONG",
+          "EM",
+          "SMALL",
+          "DT",
+          "DD",
+        ];
+        const targets = edits.map((edit) => ({
+          element: find(edit.selector),
+          text: edit.text,
+        }));
+        if (
+          new Set(targets.map((target) => target.element)).size !==
+            targets.length ||
+          targets.some(({ element, text }) => {
+            if (!element) return true;
+            const original = element.textContent ?? "";
+            const style = getComputedStyle(element);
+            return (
+              !allowed.includes(element.tagName) ||
+              element.children.length ||
+              !element.getClientRects().length ||
+              style.display === "none" ||
+              style.visibility === "hidden" ||
+              style.opacity === "0" ||
+              !original.trim() ||
+              original.length > 500 ||
+              original === text ||
+              element.closest(
+                "a, button, form, [contenteditable], [onclick], [role='button'], [role='link']",
+              ) ||
+              style.cursor === "pointer" ||
+              element.hasAttribute("data-copilot-edit-id")
+            );
+          })
+        )
+          return "Error: one or more display text targets are unavailable; nothing changed";
+        const changes = targets.map(({ element, text }, index) => {
+          const marker = `${editId}-${index}`;
+          const previousText = element!.textContent!;
+          element!.textContent = text;
+          element!.setAttribute("data-copilot-edit-id", marker);
+          return { marker, previousText, replacementText: text };
+        });
+        return { changes, editId };
+      }
       if (command.type === "fillForm") {
         const checks: { selector: string; value: string }[] = [];
         for (const field of command.fields) {
@@ -336,9 +519,34 @@ export async function executeBoundBrowserAction(
         ? "Field value verified; not submitted"
         : "Error: field value did not persist; inspect before retrying";
     },
-    args: [prepared],
+    args: [prepared, editId],
   });
   const result = results[0]?.result;
+  if (
+    prepared.type === "replaceText" &&
+    result &&
+    typeof result === "object" &&
+    result.editId === editId &&
+    Array.isArray(result.changes) &&
+    result.changes.length ===
+      ("edits" in prepared ? prepared.edits.length : 1) &&
+    result.changes.every(
+      (change: unknown) =>
+        change &&
+        typeof change === "object" &&
+        typeof (change as DisplayEdit["changes"][number]).previousText ===
+          "string",
+    )
+  ) {
+    const edits = displayEdits.get(target.tabId) ?? [];
+    edits.push({
+      url: target.url,
+      documentId,
+      changes: result.changes,
+    });
+    displayEdits.set(target.tabId, edits.slice(-20));
+    return "Display text changed; not submitted";
+  }
   return typeof result === "string"
     ? result
     : "Error: no verified action result";

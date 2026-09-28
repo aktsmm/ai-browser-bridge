@@ -317,6 +317,7 @@ export function Settings({
             value={assistantSettings}
             onChange={onAssistantSettingsChange}
             busy={taskRunning}
+            language={language}
           />
         </div>
       )}
@@ -331,6 +332,7 @@ export function Settings({
           <PersonalProfileSettings
             value={personalProfile}
             onChange={onPersonalProfileChange}
+            language={language}
             onSavingChange={(saving) => {
               setSavingProfile(saving);
               onSavingProfileChange?.(saving);

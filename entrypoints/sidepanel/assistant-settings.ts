@@ -4,6 +4,7 @@ import {
   type ChatContext,
   type TaskMode,
 } from "../../standalone-bridge/src/chat-context";
+import type { Language } from "./i18n";
 
 export const ASSISTANT_SETTINGS_KEY = "assistantSettingsV1";
 export interface AssistantProfile {
@@ -14,6 +15,7 @@ export interface AssistantProfile {
 export interface AssistantSettings {
   version: 1;
   globalInstructions: string;
+  responseLanguage: "inherit" | "ja" | "en";
   profiles: AssistantProfile[];
   selectedProfileId: string;
   mode: TaskMode;
@@ -53,6 +55,10 @@ export function normalizeAssistantSettings(value: unknown): AssistantSettings {
   return {
     version: 1,
     globalInstructions: boundedText(stored.globalInstructions, 8000),
+    responseLanguage:
+      stored.responseLanguage === "ja" || stored.responseLanguage === "en"
+        ? stored.responseLanguage
+        : "inherit",
     profiles,
     selectedProfileId: profiles.some(
       (profile) => profile.id === stored.selectedProfileId,
@@ -60,9 +66,9 @@ export function normalizeAssistantSettings(value: unknown): AssistantSettings {
       ? stored.selectedProfileId!
       : profiles[0].id,
     mode:
-      stored.mode === "input" || stored.mode === "automation"
+      stored.mode === "read-only" || stored.mode === "automation"
         ? stored.mode
-        : "read-only",
+        : "input",
     post: {
       name: boundedText(stored.post?.name, 80) || "Custom Post",
       instructions: boundedText(stored.post?.instructions, 8000),
@@ -76,12 +82,23 @@ export function buildChatContext(
   pageStatus: ChatContext["pageStatus"],
   task?: TaskOptions,
   browserActionsEnabled = true,
+  uiLanguage: Language = "ja",
+  displayEditingEnabled = false,
 ): ChatContext {
   const context: ChatContext = {
     version: 1,
     mode: task || !browserActionsEnabled ? "read-only" : settings.mode,
+    displayEditingEnabled:
+      !task &&
+      browserActionsEnabled &&
+      settings.mode !== "read-only" &&
+      displayEditingEnabled,
     allowedActions: [...BROWSER_ACTIONS],
     globalInstructions: settings.globalInstructions,
+    responseLanguage:
+      settings.responseLanguage === "inherit"
+        ? uiLanguage
+        : settings.responseLanguage,
     profileInstructions:
       settings.profiles.find(
         (profile) => profile.id === settings.selectedProfileId,

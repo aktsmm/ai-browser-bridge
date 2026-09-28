@@ -60,27 +60,23 @@ export function isAssistantAlertMessage(message: ChatMessage): boolean {
   );
 }
 
-// Collapse tool execution logs into compact markdown blocks
-function collapseToolLogs(content: string): string {
-  // Remove download markers (already processed by App.tsx)
-  let cleaned = content.replace(
+export function separateToolLogs(content: string): {
+  answer: string;
+  logs: string[];
+} {
+  const logs: string[] = [];
+  const cleaned = content.replace(
     /__DOWNLOAD_FILE__:[^:]+:[A-Za-z0-9+/=]+:__END_DOWNLOAD__/g,
     "",
   );
-
-  // Pattern: 🔧 ツール実行|Tool Execution: {name}\n📋 結果|Result: {result}
-  cleaned = cleaned.replace(
+  const answer = cleaned.replace(
     /\n*🔧 (?:ツール実行|Tool Execution): ([^\n]+)\n📋 (?:結果|Result): ([^\n]*(?:\n(?!🔧|\[Agent|##|\n\n)[^\n]*)*)\n*/g,
     (_, toolName, result) => {
-      const escapedResult = result
-        .trim()
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;");
-      return `\n#### 🔧 ${toolName.trim()}\n\n\`\`\`\n${escapedResult}\n\`\`\`\n\n`;
+      logs.push(`${toolName.trim()}: ${result.trim()}`);
+      return "\n";
     },
   );
-
-  return cleaned;
+  return { answer: answer.trim(), logs };
 }
 
 export function getQuickActions(
@@ -636,6 +632,10 @@ export function Chat({
 
         {messages.map((message, index) => {
           const isAlertMessage = isAssistantAlertMessage(message);
+          const { answer, logs } = separateToolLogs(message.content);
+          const isExecutionResult =
+            message.kind === "notice" &&
+            /^🤖 \[Loop \d+\/\d+\]/.test(message.content);
           return (
             <div
               key={index}
@@ -684,43 +684,66 @@ export function Chat({
                         : "Partial response"}
                     </div>
                   )}
-                  {message.role === "assistant" ? (
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm]}
-                      rehypePlugins={[[rehypeSanitize, markdownSanitizeSchema]]}
-                      components={{
-                        a: ({ href, children, ...props }) => {
-                          const safeHref = href || "";
-                          if (safeHref.startsWith("download-show:")) {
+                  {isExecutionResult ? (
+                    <details>
+                      <summary className="cursor-pointer">
+                        {language === "ja" ? "操作の詳細" : "Action details"}
+                      </summary>
+                      <pre className="mt-2 whitespace-pre-wrap break-words">
+                        {message.content}
+                      </pre>
+                    </details>
+                  ) : message.role === "assistant" ? (
+                    <>
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        rehypePlugins={[
+                          [rehypeSanitize, markdownSanitizeSchema],
+                        ]}
+                        components={{
+                          a: ({ href, children, ...props }) => {
+                            const safeHref = href || "";
+                            if (safeHref.startsWith("download-show:")) {
+                              return (
+                                <a
+                                  href={safeHref}
+                                  {...props}
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    handleMarkdownLinkClick(safeHref);
+                                  }}
+                                >
+                                  {children}
+                                </a>
+                              );
+                            }
                             return (
                               <a
                                 href={safeHref}
+                                target="_blank"
+                                rel="noopener noreferrer"
                                 {...props}
-                                onClick={(e) => {
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                  handleMarkdownLinkClick(safeHref);
-                                }}
                               >
                                 {children}
                               </a>
                             );
-                          }
-                          return (
-                            <a
-                              href={safeHref}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              {...props}
-                            >
-                              {children}
-                            </a>
-                          );
-                        },
-                      }}
-                    >
-                      {collapseToolLogs(message.content)}
-                    </ReactMarkdown>
+                          },
+                        }}
+                      >
+                        {answer}
+                      </ReactMarkdown>
+                      {logs.length > 0 && (
+                        <details className="mt-2 text-xs">
+                          <summary className="cursor-pointer">
+                            {language === "ja" ? "実行ログ" : "Tool log"}
+                          </summary>
+                          <pre className="mt-1 whitespace-pre-wrap break-words">
+                            {logs.join("\n\n")}
+                          </pre>
+                        </details>
+                      )}
+                    </>
                   ) : (
                     message.content
                   )}
@@ -764,7 +787,9 @@ export function Chat({
                             onClick={() =>
                               onSendMessage(
                                 action.kind === "post"
-                                  ? "Draft a post about the current page."
+                                  ? language === "ja"
+                                    ? "現在のページについて投稿文を作成してください。"
+                                    : "Draft a post about the current page."
                                   : action.prompt,
                                 [],
                                 action.kind
@@ -879,10 +904,16 @@ export function Chat({
           disabled={isLoading || Boolean(disabledReason) || readingAttachments}
           className="mb-2 text-sm text-blue-700 break-words disabled:opacity-40"
           onClick={() =>
-            onSendMessage("Draft a post about the current page.", [], {
-              kind: "post",
-              instructions: getPostPrompt(language),
-            })
+            onSendMessage(
+              language === "ja"
+                ? "現在のページについて投稿文を作成してください。"
+                : "Draft a post about the current page.",
+              [],
+              {
+                kind: "post",
+                instructions: getPostPrompt(language),
+              },
+            )
           }
         >
           {postName}

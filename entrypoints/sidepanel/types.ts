@@ -96,6 +96,8 @@ export type BrowserAction =
       slowly?: boolean;
     }
   | { type: "scroll"; direction: "up" | "down"; amount?: number }
+  | { type: "replaceText"; selector: string; text: string }
+  | { type: "replaceText"; edits: { selector: string; text: string }[] }
   | { type: "back" }
   | { type: "forward" }
   | { type: "reload" }

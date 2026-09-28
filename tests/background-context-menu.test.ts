@@ -168,6 +168,35 @@ describe("background context menu actions", () => {
 });
 
 describe("buildContextMenuSpecs", () => {
+  it("localizes the default custom post name without changing saved names", () => {
+    const japanese = backgroundModule.buildContextMenuSpecs(
+      [],
+      "Custom Post",
+      true,
+      "ja",
+    );
+    expect(japanese.find((item) => item.id === "postConfigured")?.title).toBe(
+      "カスタム投稿",
+    );
+    const english = backgroundModule.buildContextMenuSpecs(
+      [],
+      "Custom Post",
+      true,
+      "en",
+    );
+    expect(english.find((item) => item.id === "postConfigured")?.title).toBe(
+      "Custom Post",
+    );
+    const named = backgroundModule.buildContextMenuSpecs(
+      [],
+      "My post",
+      true,
+      "ja",
+    );
+    expect(named.find((item) => item.id === "postConfigured")?.title).toBe(
+      "My post",
+    );
+  });
   it("registers the post submenu as a parent with four children", () => {
     const specs = backgroundModule.buildContextMenuSpecs([]);
     const parent = specs.find(

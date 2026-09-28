@@ -13,7 +13,7 @@ export default defineConfig({
     name: "AI Browser Bridge",
     description:
       "Analyze and interact with browser pages using AI. Works with GitHub Copilot or local LLMs.",
-    version: process.env.npm_package_version || "0.1.23",
+    version: process.env.npm_package_version || "0.1.24",
     icons: {
       16: "icon/16.png",
       48: "icon/48.png",
@@ -28,10 +28,11 @@ export default defineConfig({
       "contextMenus",
       "downloads",
     ],
-    // Regular page access uses activeTab + scripting on user-invoked tabs.
-    // Keep static host access limited to local placeholder pages only.
-    host_permissions: LOCAL_PLACEHOLDER_MATCHES,
-    optional_host_permissions: ["https://*/*", "http://*/*"],
+    host_permissions: [
+      ...LOCAL_PLACEHOLDER_MATCHES,
+      "https://*/*",
+      "http://*/*",
+    ],
     side_panel: {
       default_path: "sidepanel.html",
     },

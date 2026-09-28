@@ -7,6 +7,8 @@ import type { BridgeCapabilities, LLMSettings } from "../types";
 import { normalizeAssistantSettings } from "../assistant-settings";
 import { PageContextStatus } from "./PageContextStatus";
 import { AssistantPreferences } from "./AssistantPreferences";
+import { PersonalProfileSettings } from "./PersonalProfileSettings";
+import { normalizePersonalProfile } from "../personal-profile";
 
 const noop = vi.fn();
 
@@ -77,6 +79,43 @@ function renderSettings(options?: {
 }
 
 describe("Settings provider UI", () => {
+  it("localizes personal profile help and free-form fields", () => {
+    const japanese = renderToStaticMarkup(
+      <PersonalProfileSettings
+        value={normalizePersonalProfile(null)}
+        onChange={noop}
+        language="ja"
+      />,
+    );
+    expect(japanese).toContain("この端末のブラウザ拡張内に保存");
+    expect(japanese).toContain("その他の項目");
+    expect(japanese).toContain("項目を追加");
+    expect(japanese).not.toContain("Remember on this device");
+    const english = renderToStaticMarkup(
+      <PersonalProfileSettings
+        value={normalizePersonalProfile(null)}
+        onChange={noop}
+        language="en"
+      />,
+    );
+    expect(english).toContain("How is this used?");
+  });
+  it("localizes assistant fields and explains the blank custom post preset", () => {
+    const japanese = renderSettings({ assistant: true, language: "ja" });
+    expect(japanese).toContain("共通の指示");
+    expect(japanese).toContain("回答言語");
+    expect(japanese).toContain("画面の言語に従う（日本語）");
+    expect(japanese).toContain("カスタム投稿の指示を空欄にすると？");
+    expect(japanese).toContain("フォーマル・140字");
+    expect(japanese).toContain('value="カスタム投稿"');
+    expect(japanese).toContain("<details");
+    expect(japanese).not.toContain("Global instructions");
+
+    const english = renderSettings({ assistant: true, language: "en" });
+    expect(english).toContain("Global instructions");
+    expect(english).toContain("Follow interface language (English)");
+    expect(english).toContain("built-in formal 140-character prompt");
+  });
   it("locks profile replacement while a task is running", () => {
     const html = renderToStaticMarkup(
       <AssistantPreferences
@@ -107,13 +146,12 @@ describe("Settings provider UI", () => {
         language="en"
         busy={true}
         onRead={noop}
-        onAllow={noop}
       />,
     );
     expect(html).toContain("Page ready");
     expect(html).not.toContain("Reading page...");
-    expect(html).toContain('disabled=""');
-    expect(html).toContain("DOM");
+    expect(html).not.toContain("Read current page");
+    expect(html).not.toContain("frames");
   });
   it("presents page permission recovery without internal status codes", () => {
     const html = renderToStaticMarkup(
@@ -128,12 +166,12 @@ describe("Settings provider UI", () => {
         language="en"
         busy={false}
         onRead={noop}
-        onAllow={noop}
       />,
     );
     expect(html).toContain("Site permission required");
-    expect(html).toContain("Allow this site");
-    expect(html).toContain("Read current page");
+    expect(html).not.toContain("Allow this site");
+    expect(html).toContain("Allow site access in the browser");
+    expect(html).toContain("Retry reading");
     expect(html).not.toContain("permission-required");
   });
   it("uses an accessible full-height settings view with keyboard tabs", () => {

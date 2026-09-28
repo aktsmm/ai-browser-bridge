@@ -10,8 +10,13 @@
     "noEmit": true,
     "jsx": "react-jsx",
     "lib": ["ESNext", "DOM"],
-    "types": ["wxt/client"]
+    "types": ["wxt/client", "chrome"]
   },
-  "include": ["**/*.ts", "**/*.tsx"],
-  "exclude": ["node_modules", ".output", "standalone-bridge/out"]
+  "include": ["**/*.ts", "**/*.tsx", ".wxt/wxt.d.ts"],
+  "exclude": [
+    "node_modules",
+    ".output",
+    "standalone-bridge/out",
+    "entrypoints/sidepanel/chrome-shim.d.ts"
+  ]
 }

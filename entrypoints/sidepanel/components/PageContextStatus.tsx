@@ -9,7 +9,6 @@ export function PageContextStatus({
   busy,
   reading = false,
   onRead,
-  onAllow,
 }: {
   state: PageContextResult | null;
   origin: string;
@@ -17,7 +16,6 @@ export function PageContextStatus({
   busy: boolean;
   reading?: boolean;
   onRead: () => void;
-  onAllow: () => void;
 }) {
   const labels =
     language === "ja"
@@ -58,37 +56,27 @@ export function PageContextStatus({
                 ? "ページ未取得"
                 : "Page not read"}
         </div>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={onRead}
-          className="shrink-0 text-xs text-blue-700 underline disabled:opacity-40 focus-visible:ring-2 focus-visible:ring-blue-500"
-        >
-          {language === "ja" ? "ページを読み取る" : "Read current page"}
-        </button>
+        {state &&
+          ["empty", "permission-required", "failed"].includes(state.status) && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onRead}
+              className="shrink-0 text-xs text-blue-700 underline disabled:opacity-40 focus-visible:ring-2 focus-visible:ring-blue-500"
+            >
+              {language === "ja" ? "再読み取り" : "Retry reading"}
+            </button>
+          )}
       </div>
       {origin && (
         <div className="mt-1 text-xs text-gray-500 break-all">{origin}</div>
       )}
-      {state && ["ok", "partial"].includes(state.status) && (
+      {state?.status === "permission-required" && (
         <div className="mt-1 text-xs text-gray-500">
-          {state.method === "image"
-            ? language === "ja"
-              ? "画像"
-              : "Image"
-            : "DOM"}{" "}
-          · {state.frames.length} {language === "ja" ? "フレーム" : "frames"}
+          {language === "ja"
+            ? "ブラウザの拡張機能メニューでこのサイトへのアクセスを許可し、再読み取りしてください。"
+            : "Allow site access in the browser's extension menu, then retry reading."}
         </div>
-      )}
-      {state?.status === "permission-required" && origin && (
-        <button
-          type="button"
-          disabled={busy}
-          onClick={onAllow}
-          className="mt-1 text-xs text-blue-700 underline disabled:opacity-40"
-        >
-          {language === "ja" ? "このサイトを許可" : "Allow this site"}
-        </button>
       )}
     </section>
   );

@@ -67,7 +67,10 @@ export function buildContextMenuSpecs(
   customPrompts: CustomPrompt[] = [],
   postName?: string,
   customPost = false,
+  language: "ja" | "en" = "ja",
 ): ContextMenuSpec[] {
+  const displayedPostName =
+    postName === "Custom Post" && language === "ja" ? "カスタム投稿" : postName;
   const specs: ContextMenuSpec[] = [
     {
       id: "askAboutSelection",
@@ -81,7 +84,7 @@ export function buildContextMenuSpecs(
     },
     {
       id: POST_PARENT_MENU_ID,
-      title: postName?.trim() || "このページでポストを作成",
+      title: displayedPostName?.trim() || "このページでポストを作成",
       contexts: ["page"],
     },
   ];
@@ -90,7 +93,7 @@ export function buildContextMenuSpecs(
     specs.push({
       id: "postConfigured",
       parentId: POST_PARENT_MENU_ID,
-      title: postName?.trim() || "Custom Post",
+      title: displayedPostName?.trim() || "Custom Post",
       contexts: ["page"],
     });
   for (const [id, { title }] of Object.entries(POST_MENU_ITEMS)) {
@@ -257,7 +260,10 @@ export default defineBackground({
       });
 
       const customPrompts = await loadCustomPrompts();
-      const stored = await browser.storage.local.get(ASSISTANT_SETTINGS_KEY);
+      const stored = await browser.storage.local.get([
+        ASSISTANT_SETTINGS_KEY,
+        "language",
+      ]);
       const assistant = normalizeAssistantSettings(
         stored[ASSISTANT_SETTINGS_KEY],
       );
@@ -265,6 +271,7 @@ export default defineBackground({
         customPrompts,
         assistant.post.name,
         true,
+        stored.language === "en" ? "en" : "ja",
       )) {
         browser.contextMenus.create(spec);
       }
@@ -289,7 +296,9 @@ export default defineBackground({
     browser.storage.onChanged.addListener((changes, areaName) => {
       if (
         areaName === "local" &&
-        (changes[CUSTOM_PROMPTS_STORAGE_KEY] || changes[ASSISTANT_SETTINGS_KEY])
+        (changes[CUSTOM_PROMPTS_STORAGE_KEY] ||
+          changes[ASSISTANT_SETTINGS_KEY] ||
+          changes.language)
       ) {
         void setupContextMenus();
       }

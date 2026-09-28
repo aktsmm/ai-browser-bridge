@@ -7,6 +7,7 @@ import {
   getQuickActions,
   isAssistantAlertMessage,
   markdownSanitizeSchema,
+  separateToolLogs,
   shouldSubmitChat,
   isNearConversationEnd,
 } from "./Chat";
@@ -200,6 +201,29 @@ describe("getQuickActions", () => {
     );
 
     expect(html).toContain("Deep dive");
+  });
+  it("keeps diagnostic logs behind a disclosure without removing the answer", () => {
+    const content =
+      "Final post\n🔧 Tool Execution: getHtml\n📋 Result: internal data\n";
+    expect(separateToolLogs(content)).toEqual({
+      answer: "Final post",
+      logs: ["getHtml: internal data"],
+    });
+    const html = renderToStaticMarkup(
+      React.createElement(Chat, {
+        messages: [{ role: "assistant", content }],
+        isLoading: false,
+        onSendMessage: vi.fn(),
+        onClearMessages: vi.fn(),
+        onStopGeneration: vi.fn(),
+        language: "en",
+        onSaveMarkdown: vi.fn(),
+        onSaveBlogDraft: vi.fn(),
+      }),
+    );
+    expect(html).toContain("Final post");
+    expect(html).toContain("<details");
+    expect(html).toContain("Tool log");
   });
 
   it("accepts only numeric internal download-show ids", () => {

@@ -1482,6 +1482,45 @@ function parseAction(type: string, params?: string): BrowserAction | null {
   const trimmedParams = params?.trim();
 
   switch (type) {
+    case "replacetext": {
+      if (!trimmedParams?.startsWith("{")) return null;
+      try {
+        const parsed = JSON.parse(trimmedParams) as Record<string, unknown>;
+        const validEdit = (
+          edit: unknown,
+        ): edit is { selector: string; text: string } => {
+          if (!edit || typeof edit !== "object" || Array.isArray(edit))
+            return false;
+          const candidate = edit as Record<string, unknown>;
+          return (
+            typeof candidate.selector === "string" &&
+            /^(?:ref:)?(?:f\d+:)?e\d+$/i.test(candidate.selector) &&
+            typeof candidate.text === "string" &&
+            candidate.text.length > 0 &&
+            candidate.text.length <= 500 &&
+            !/[\r\n]/.test(candidate.text)
+          );
+        };
+        if (Array.isArray(parsed.edits)) {
+          return parsed.edits.length > 0 &&
+            parsed.edits.length <= 10 &&
+            parsed.edits.every(validEdit) &&
+            new Set(parsed.edits.map((edit) => edit.selector.toLowerCase()))
+              .size === parsed.edits.length
+            ? { type: "replaceText", edits: parsed.edits }
+            : null;
+        }
+        return validEdit(parsed)
+          ? {
+              type: "replaceText",
+              selector: parsed.selector,
+              text: parsed.text,
+            }
+          : null;
+      } catch {
+        return null;
+      }
+    }
     case "navigate":
     case "goto":
     case "open":

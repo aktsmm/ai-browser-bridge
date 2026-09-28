@@ -78,6 +78,7 @@ import { resolveSelectedCopilotModel } from "./copilot-model-selection";
 import {
   isPrivateBrowserTab,
   assertPageShareAllowed,
+  privateTabBlockedMessage,
   markPrivateBrowserTab,
   loadPersonalProfile,
   normalizePersonalProfile,
@@ -85,6 +86,12 @@ import {
   redactPrivateText,
 } from "./personal-profile";
 import { effectiveBrowserActions } from "../../standalone-bridge/src/chat-context";
+import {
+  actionUsesPersonalProfile,
+  forgetDisplayEdits,
+  hasUndoableDisplayEdit,
+  undoLastDisplayEdit,
+} from "./browser-execution";
 import { readPageWithRecovery, type PageContextResult } from "./page-context";
 
 const DEFAULT_SETTINGS: LLMSettings = {
@@ -237,6 +244,42 @@ export default function App() {
     string | null
   >(null);
   const [browserActionsEnabled, setBrowserActionsEnabled] = useState(true);
+  const [displayEditingEnabled, setDisplayEditingEnabled] = useState(false);
+  const activeDisplayEditRef = useRef(false);
+  const [undoDisplayTabIds, setUndoDisplayTabIds] = useState<Set<number>>(
+    () => new Set(),
+  );
+  const [activeTabId, setActiveTabId] = useState<number | null>(null);
+  useEffect(() => {
+    let disposed = false;
+    const updateActiveTab = () => {
+      void chrome.tabs.query({ active: true, currentWindow: true }).then(
+        ([tab]) => {
+          if (!disposed) setActiveTabId(tab?.id ?? null);
+        },
+        () => {
+          if (!disposed) setActiveTabId(null);
+        },
+      );
+    };
+    const onRemoved = (tabId: number) => {
+      forgetDisplayEdits(tabId);
+      setUndoDisplayTabIds((previous) => {
+        if (!previous.has(tabId)) return previous;
+        const next = new Set(previous);
+        next.delete(tabId);
+        return next;
+      });
+    };
+    updateActiveTab();
+    chrome.tabs.onActivated.addListener(updateActiveTab);
+    chrome.tabs.onRemoved.addListener(onRemoved);
+    return () => {
+      disposed = true;
+      chrome.tabs.onActivated.removeListener(updateActiveTab);
+      chrome.tabs.onRemoved.removeListener(onRemoved);
+    };
+  }, []);
   const [fileOperationsEnabled, setFileOperationsEnabled] = useState(true);
   const [language, setLanguage] = useState<Language>("ja");
   const [maxAgentLoops, setMaxAgentLoops] = useState(DEFAULT_AGENT_LOOPS);
@@ -892,6 +935,7 @@ export default function App() {
   const extractPageContent = async (options?: {
     mode?: "interactive" | "content";
     autoScrollForLazyLoad?: boolean;
+    displayEditing?: boolean;
   }): Promise<string> => {
     try {
       const targetTabId = activeContentTabIdRef.current;
@@ -945,12 +989,15 @@ export default function App() {
 
       const mode = options?.mode ?? "interactive";
       const autoScrollForLazyLoad = options?.autoScrollForLazyLoad ?? false;
+      const displayEditing =
+        options?.displayEditing ?? activeDisplayEditRef.current;
 
       const injection = {
         target: { tabId: tab.id, allFrames: true },
         func: async (opts: {
           mode: "interactive" | "content";
           autoScrollForLazyLoad: boolean;
+          displayEditing: boolean;
         }) => {
           const VIEWPORT_MARGIN_PX = 200;
           const MAX_VIEWPORT_CHARS = 12000;
@@ -1212,6 +1259,27 @@ export default function App() {
             candidates.push({ el, rect });
           });
 
+          if (opts.mode === "interactive" && opts.displayEditing) {
+            queryAll(
+              "h1, h2, h3, h4, p, span, div, td, th, li, strong, em, small, dt, dd",
+            ).forEach((el) => {
+              const text = el.textContent?.trim() ?? "";
+              if (
+                seen.has(el) ||
+                el.children.length ||
+                !text ||
+                text.length > 160 ||
+                !isVisible(el) ||
+                el.closest(
+                  "a, button, form, [contenteditable], [role='button'], [role='link']",
+                )
+              )
+                return;
+              seen.add(el);
+              candidates.push({ el, rect: el.getBoundingClientRect() });
+            });
+          }
+
           // Add pointer-cursor elements (often clickable divs/spans)
           queryAll("*").forEach((el) => {
             if (!isVisible(el)) return;
@@ -1312,8 +1380,12 @@ export default function App() {
             title: document.title,
           };
         },
-        args: [{ mode, autoScrollForLazyLoad }] as [
-          { mode: "interactive" | "content"; autoScrollForLazyLoad: boolean },
+        args: [{ mode, autoScrollForLazyLoad, displayEditing }] as [
+          {
+            mode: "interactive" | "content";
+            autoScrollForLazyLoad: boolean;
+            displayEditing: boolean;
+          },
         ],
       };
       let partialFrames = false;
@@ -1401,6 +1473,12 @@ export default function App() {
       return;
 
     inFlightRequestRef.current = true;
+    const editingForRun =
+      displayEditingEnabled &&
+      !task &&
+      browserActionsEnabled &&
+      assistantSettings.mode !== "read-only";
+    activeDisplayEditRef.current = editingForRun;
     const history = task || isolatedTaskRef.current ? [] : messages;
     isolatedTaskRef.current = Boolean(task);
 
@@ -1466,9 +1544,7 @@ export default function App() {
         (privateTabsRef.current.has(targetTab.id) ||
           (await isPrivateBrowserTab(targetTab.id)))
       )
-        throw new TaskBlockedError(
-          "This tab has received personal profile data. Continue manually, or use a new tab for another AI task. Its contents will not be sent to the model.",
-        );
+        throw new TaskBlockedError(privateTabBlockedMessage(language));
       const personalForRun =
         !task &&
         assistantSettings.mode !== "read-only" &&
@@ -1502,7 +1578,7 @@ export default function App() {
       } else {
         // Text or Hybrid mode: extract text
         pageContent = await extractPageContent({
-          mode: wantsContentOnly ? "content" : "interactive",
+          mode: wantsContentOnly && !editingForRun ? "content" : "interactive",
           autoScrollForLazyLoad: wantsContentOnly && autoScrollForLazyLoad,
         });
       }
@@ -1574,9 +1650,20 @@ export default function App() {
             }
           : undefined,
         browserActionsEnabled,
+        language,
+        editingForRun,
       );
       if (!pageStateRef.current?.frames.length) context.allowedActions = [];
       context.profileFields = personalForRun ? Object.keys(personalForRun) : [];
+      context.profileFieldLabels = personalForRun
+        ? Object.fromEntries(
+            profileForRun.customFields.flatMap((field, index) =>
+              field.name.trim() && field.value.trim()
+                ? [[`custom${index + 1}`, field.name.trim()]]
+                : [],
+            ),
+          )
+        : {};
       context.fileOperationsEnabled =
         context.mode === "automation" &&
         fileOperationsEnabled &&
@@ -1590,7 +1677,7 @@ export default function App() {
           ? { ...context.target, url: redact(context.target.url) }
           : undefined,
       });
-      await assertPageShareAllowed(targetTab?.id);
+      await assertPageShareAllowed(targetTab?.id, language);
       const response = await fetch(`${getBridgeBaseUrl()}/chat`, {
         method: "POST",
         headers: {
@@ -1789,7 +1876,11 @@ export default function App() {
 
           for (const action of executableActions) {
             try {
-              if (personalForRun && targetTab?.id !== undefined) {
+              if (
+                personalForRun &&
+                actionUsesPersonalProfile(action, personalForRun) &&
+                targetTab?.id !== undefined
+              ) {
                 privateTabsRef.current.add(targetTab.id);
                 await markPrivateBrowserTab(targetTab.id);
                 stopForReview = true;
@@ -1802,6 +1893,16 @@ export default function App() {
                 personal: personalForRun,
                 signal: abortControllerRef.current?.signal,
               });
+              if (
+                action.type === "replaceText" &&
+                result === "Display text changed; not submitted" &&
+                targetTab?.id !== undefined
+              ) {
+                const editedTabId = targetTab.id;
+                setUndoDisplayTabIds((previous) =>
+                  new Set(previous).add(editedTabId),
+                );
+              }
 
               actionResults.push(`• ${result}`);
               if (
@@ -1969,7 +2070,7 @@ export default function App() {
               break;
             }
 
-            await assertPageShareAllowed(targetTab?.id);
+            await assertPageShareAllowed(targetTab?.id, language);
             const continueResponse = await fetch(`${getBridgeBaseUrl()}/chat`, {
               method: "POST",
               headers: {
@@ -2214,6 +2315,8 @@ export default function App() {
         ]);
       }
     } finally {
+      activeDisplayEditRef.current = false;
+      if (editingForRun) setDisplayEditingEnabled(false);
       if (abortControllerRef.current?.signal.aborted) {
         setMessages((previous) =>
           finishStoppedConversation(
@@ -2257,9 +2360,13 @@ export default function App() {
     pendingTaskRef.current = undefined;
     void sendMessage(
       task?.kind === "post"
-        ? "Draft a post about the current page."
+        ? language === "ja"
+          ? "現在のページについて投稿文を作成してください。"
+          : "Draft a post about the current page."
         : task?.kind === "custom"
-          ? "Run the selected custom instruction on this page."
+          ? language === "ja"
+            ? "選択したカスタム指示をこのページに適用してください。"
+            : "Run the selected custom instruction on this page."
           : prompt,
       [],
       task,
@@ -2289,22 +2396,11 @@ export default function App() {
     setShowSettings(false);
     settingsButtonRef.current?.focus();
   };
-  const refreshPageContext = async (allowSite = false) => {
+  const refreshPageContext = async () => {
     if (inFlightRequestRef.current || readingPageRef.current) return;
     readingPageRef.current = true;
     setIsReadingPage(true);
     try {
-      if (allowSite && pageOrigin) {
-        const granted = await chrome.permissions.request({
-          origins: [`${pageOrigin}/*`],
-        });
-        if (!granted)
-          throw new TaskBlockedError(
-            language === "ja"
-              ? "サイトの許可は変更されていません。"
-              : "Site permission was not granted.",
-          );
-      }
       if (!(await privacyReadyRef.current))
         throw new TaskBlockedError(
           language === "ja"
@@ -2314,7 +2410,7 @@ export default function App() {
       const tab = (
         await chrome.tabs.query({ active: true, currentWindow: true })
       )[0];
-      await assertPageShareAllowed(tab?.id);
+      await assertPageShareAllowed(tab?.id, language);
       activeContentTabIdRef.current = tab?.id ?? null;
       await extractPageContent({ mode: "interactive" });
     } catch (error) {
@@ -2466,7 +2562,10 @@ export default function App() {
           }}
           browserActionsEnabled={browserActionsEnabled}
           onBrowserActionsChange={(enabled) => {
-            if (!enabled) stopGeneration();
+            if (!enabled) {
+              stopGeneration();
+              setDisplayEditingEnabled(false);
+            }
             setBrowserActionsEnabled(enabled);
           }}
           fileOperationsEnabled={fileOperationsEnabled}
@@ -2530,6 +2629,8 @@ export default function App() {
             value={assistantSettings.mode}
             onChange={(event) => {
               stopGeneration();
+              if (event.target.value === "read-only")
+                setDisplayEditingEnabled(false);
               setAssistantSettings({
                 ...assistantSettings,
                 mode: event.target.value as typeof assistantSettings.mode,
@@ -2540,6 +2641,63 @@ export default function App() {
             <option value="input">Assist with input</option>
             <option value="automation">Browser automation</option>
           </select>
+          <label className="flex items-center gap-1">
+            <input
+              type="checkbox"
+              checked={displayEditingEnabled}
+              disabled={
+                isLoading ||
+                !browserActionsEnabled ||
+                assistantSettings.mode === "read-only"
+              }
+              onChange={(event) =>
+                setDisplayEditingEnabled(event.target.checked)
+              }
+            />
+            {language === "ja"
+              ? "次のタスクで表示を編集"
+              : "Edit display in next task"}
+          </label>
+          {activeTabId !== null && undoDisplayTabIds.has(activeTabId) && (
+            <button
+              type="button"
+              disabled={isLoading}
+              className="text-blue-700 disabled:opacity-40"
+              onClick={async () => {
+                const tabId = activeTabId;
+                const [activeTab] = await chrome.tabs
+                  .query({ active: true, currentWindow: true })
+                  .catch(() => []);
+                if (activeTab?.id !== tabId) {
+                  setActiveTabId(activeTab?.id ?? null);
+                  return;
+                }
+                const restored = await undoLastDisplayEdit(tabId);
+                if (!hasUndoableDisplayEdit(tabId))
+                  setUndoDisplayTabIds((previous) => {
+                    const next = new Set(previous);
+                    next.delete(tabId);
+                    return next;
+                  });
+                setMessages((previous) => [
+                  ...previous,
+                  {
+                    role: "assistant",
+                    kind: "notice",
+                    content: restored
+                      ? language === "ja"
+                        ? "直前の表示変更を元に戻しました。"
+                        : "Last display edit undone."
+                      : language === "ja"
+                        ? "元の要素が変わったため復元できませんでした。"
+                        : "Display changed; the last edit cannot be undone.",
+                  },
+                ]);
+              }}
+            >
+              {language === "ja" ? "元に戻す" : "Undo display edit"}
+            </button>
+          )}
           {pageOrigin &&
             Object.keys(personalValues(personalProfile)).length > 0 &&
             assistantSettings.mode !== "read-only" && (
@@ -2554,7 +2712,9 @@ export default function App() {
                     )
                   }
                 />
-                Use personal profile on {pageOrigin} for the next task
+                {language === "ja"
+                  ? `次のタスクで ${pageOrigin} に個人プロフィールを使用`
+                  : `Use personal profile on ${pageOrigin} for the next task`}
               </label>
             )}
         </div>
@@ -2565,7 +2725,6 @@ export default function App() {
           busy={isLoading || isReadingPage}
           reading={isReadingPage}
           onRead={() => void refreshPageContext()}
-          onAllow={() => void refreshPageContext(true)}
         />
         <Chat
           isSavingAnswer={isSavingAnswer}
@@ -2584,7 +2743,11 @@ export default function App() {
                     : "Check bridge compatibility in Settings"
                   : undefined
           }
-          postName={assistantSettings.post.name}
+          postName={
+            language === "ja" && assistantSettings.post.name === "Custom Post"
+              ? "カスタム投稿"
+              : assistantSettings.post.name
+          }
           messages={messages}
           isLoading={isLoading}
           onSendMessage={sendMessage}

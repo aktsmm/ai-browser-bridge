@@ -9,6 +9,7 @@ import { parseArgs } from "node:util";
 const { values } = parseArgs({
   options: {
     "playwright-module": { type: "string" },
+    "browser-executable": { type: "string" },
     "output-dir": { type: "string" },
     "extension-dir": { type: "string" },
   },
@@ -96,10 +97,33 @@ const bridgeServer = http.createServer(async (request, response) => {
     const payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));
     requests.push(payload);
     response.setHeader("Content-Type", "text/plain; charset=utf-8");
+    if (payload.messages.at(-1)?.content === "Edit both fixture labels") {
+      const headingRef = payload.pageContent.match(
+        /\[(f0:e\d+)\] heading "Installed extension fixture"/,
+      )?.[1];
+      const articleRef = payload.pageContent.match(
+        /\[(f0:e\d+)\] p "Verified local article/,
+      )?.[1];
+      assert(
+        headingRef && articleRef,
+        "Display-edit refs missing from snapshot",
+      );
+      response.end(
+        `[ACTION: replaceText, ${JSON.stringify({
+          edits: [
+            { selector: `ref:${headingRef}`, text: "Demo heading" },
+            { selector: `ref:${articleRef}`, text: "Demo article" },
+          ],
+        })}]`,
+      );
+      return;
+    }
     response.end(
       payload.messages.at(-1)?.content === "Fill the fixture name"
         ? "[ACTION: type, #name, Installed Test]"
-        : "Installed extension response.",
+        : payload.context?.target?.url?.includes("permission.fixture.test")
+          ? "Second site response."
+          : "Installed extension response.",
     );
     return;
   }
@@ -126,6 +150,7 @@ try {
     path.join(ownedDirectory, "profile"),
     {
       headless: false,
+      executablePath: values["browser-executable"],
       viewport: { width: 480, height: 900 },
       acceptDownloads: true,
       downloadsPath: downloads,
@@ -142,11 +167,65 @@ try {
     },
   );
   context.setDefaultTimeout(15000);
+  assert.equal(typeof manifest.background?.service_worker, "string");
+  const expectedWorkerPath = `/${manifest.background.service_worker}`;
+  const matchesWorker = (item) => {
+    const url = new URL(item.url());
+    return (
+      url.protocol === "chrome-extension:" &&
+      url.pathname === expectedWorkerPath
+    );
+  };
   const worker =
-    context.serviceWorkers()[0] ||
-    (await context.waitForEvent("serviceworker", { timeout: 15000 }));
+    context.serviceWorkers().find(matchesWorker) ||
+    (await context
+      .waitForEvent("serviceworker", {
+        predicate: matchesWorker,
+        timeout: 15000,
+      })
+      .catch(() => {
+        throw new Error(
+          `Expected extension worker not registered: ${JSON.stringify({
+            expectedName: manifest.name,
+            expectedWorkerPath,
+            observedWorkers: context.serviceWorkers().map((item) => item.url()),
+            browserVersion: context.browser()?.version(),
+            browserExecutable: path.basename(
+              values["browser-executable"] || "bundled Chromium",
+            ),
+          })}`,
+        );
+      }));
   const extensionId = new URL(worker.url()).hostname;
   assert.match(extensionId, /^[a-p]{32}$/);
+  const workerIdentity = await worker.evaluate(() => ({
+    chromeAvailable: typeof chrome !== "undefined",
+    id: typeof chrome === "undefined" ? null : chrome.runtime?.id,
+    name:
+      typeof chrome === "undefined"
+        ? null
+        : chrome.runtime?.getManifest?.().name,
+    storageAvailable:
+      typeof chrome !== "undefined" && Boolean(chrome.storage?.local),
+  }));
+  if (
+    workerIdentity.id !== extensionId ||
+    workerIdentity.name !== manifest.name ||
+    !workerIdentity.storageAvailable
+  )
+    throw new Error(
+      `Extension worker environment mismatch: ${JSON.stringify({
+        expectedName: manifest.name,
+        expectedWorkerPath,
+        workerUrl: worker.url(),
+        workerIdentity,
+        observedWorkers: context.serviceWorkers().map((item) => item.url()),
+        browserVersion: context.browser()?.version(),
+        browserExecutable: path.basename(
+          values["browser-executable"] || "bundled Chromium",
+        ),
+      })}`,
+    );
   await worker.evaluate(async (port) => {
     await chrome.storage.local.set({
       serverPort: port,
@@ -284,39 +363,84 @@ try {
   const input = panel.locator("form textarea").last();
   await input.fill("Fill the fixture name");
   await input.press("Enter");
+  await panel.getByText("Action details", { exact: true }).last().click();
   await panel.getByText(/Field value verified; not submitted/).waitFor();
   assert.equal(await source.locator("#name").inputValue(), "Installed Test");
   assert.equal(await source.evaluate(() => window.submissions), 0);
   await panel
     .getByText("Installed extension response.", { exact: true })
     .waitFor();
-  const denied = await context.newPage();
-  const deniedUrl = `http://permission.fixture.test:${fixturePort}/fixture`;
-  await denied.goto(deniedUrl);
-  const deniedTabId = await worker.evaluate(
-    async (url) => (await chrome.tabs.query({ url }))[0]?.id,
-    deniedUrl,
+  await panel
+    .getByRole("checkbox", { name: "Edit display in next task" })
+    .check();
+  await input.fill("Edit both fixture labels");
+  await input.press("Enter");
+  await source.getByText("Demo heading", { exact: true }).waitFor();
+  assert.equal(await source.locator("main > p").textContent(), "Demo article");
+  const editRequest = requests.find(
+    (item) => item.messages.at(-1)?.content === "Edit both fixture labels",
   );
-  assert.equal(typeof deniedTabId, "number");
+  assert(editRequest.pageContent.includes("Verified local article"));
+  const undoEdit = panel.getByRole("button", { name: "Undo display edit" });
+  await undoEdit.waitFor();
+  const secondSite = await context.newPage();
+  const secondUrl = `http://permission.fixture.test:${fixturePort}/fixture`;
+  await secondSite.goto(secondUrl);
+  const secondTabId = await worker.evaluate(
+    async (url) => (await chrome.tabs.query({ url }))[0]?.id,
+    secondUrl,
+  );
+  assert.equal(typeof secondTabId, "number");
+  await panel.evaluate(
+    (tabId) => chrome.tabs.update(tabId, { active: true }),
+    secondTabId,
+  );
+  await undoEdit.waitFor({ state: "hidden", timeout: 3000 });
+  assert.equal(await source.locator("h1").textContent(), "Demo heading");
+  await panel.evaluate(
+    (tabId) => chrome.tabs.update(tabId, { active: true }),
+    sourceTabId,
+  );
+  await undoEdit.waitFor({ state: "visible", timeout: 3000 });
+  await undoEdit.click();
+  await source
+    .getByText("Installed extension fixture", { exact: true })
+    .waitFor();
+  assert.equal(
+    await source.locator("main > p").textContent(),
+    "Verified local article for extraction.",
+  );
+  assert.equal(
+    await panel
+      .getByRole("checkbox", { name: "Edit display in next task" })
+      .isChecked(),
+    false,
+  );
+  await panel.evaluate(
+    (tabId) => chrome.tabs.update(tabId, { active: true }),
+    secondTabId,
+  );
   assert.equal(
     await panel.evaluate(() =>
       chrome.permissions.contains({
         origins: ["http://permission.fixture.test/*"],
       }),
     ),
-    false,
+    true,
   );
   const requestCount = requests.length;
   await worker.evaluate(
     async (tabId) =>
       chrome.storage.local.set({ pendingAction: { type: "post", tabId } }),
-    deniedTabId,
+    secondTabId,
   );
-  await panel.getByText("Site permission required", { exact: true }).waitFor();
-  await panel
-    .getByRole("button", { name: "Allow this site", exact: true })
-    .waitFor();
-  assert.equal(requests.length, requestCount);
+  await panel.getByText("Second site response.", { exact: true }).waitFor();
+  assert.equal(requests.length, requestCount + 1);
+  assert(requests.at(-1).pageContent.includes("Verified local article"));
+  assert.equal(
+    await panel.getByRole("button", { name: "Allow this site" }).count(),
+    0,
+  );
   assert.deepEqual(pageErrors, []);
   await panel.screenshot({
     path: path.join(output, "installed-extension.png"),
@@ -335,8 +459,11 @@ try {
         "real background download",
         "document-bound input and read-back",
         "no form submission",
-        "denied host stops before model request",
-        "site permission recovery control",
+        "two display edits in one action, undone together",
+        "undo follows the edited tab and stays hidden on other tabs",
+        "original page text sent to the selected model before display editing",
+        "second HTTP site readable without a site-grant action",
+        "page task still required before sending content to the model",
       ],
       llm: "local fixture",
       surface: "extension sidepanel document in an owned tab",
