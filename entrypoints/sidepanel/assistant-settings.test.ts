@@ -7,6 +7,7 @@ import {
   buildContextInstructions,
   isChatContext,
 } from "../../standalone-bridge/src/chat-context";
+import { t } from "./i18n";
 
 describe("assistant settings", () => {
   it("defaults to input assist and preserves bounded, unique profiles", () => {
@@ -135,5 +136,22 @@ describe("assistant settings", () => {
         true,
       ).allowedActions,
     ).not.toContain("replaceText");
+  });
+  it("does not report a requested download as saved without a completion result", () => {
+    const context = buildChatContext(
+      normalizeAssistantSettings({ mode: "automation" }),
+      { tabId: 2, url: "https://example.com/" },
+      "ok",
+    );
+    expect(buildContextInstructions(context, "standalone")).toContain(
+      "Download requested is not download completed",
+    );
+    expect(t("loopContinuationPrompt", "en")).toContain(
+      "Do not report a download as complete without a verified completion result",
+    );
+    expect(t("loopContinuationPrompt", "ja")).toContain(
+      "保存完了の検証結果がないダウンロードは完了と報告しないでください",
+    );
+    expect(t("downloadResults", "en")).toBe("File save results");
   });
 });

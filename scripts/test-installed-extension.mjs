@@ -42,8 +42,33 @@ let releaseCapabilities;
 const capabilitiesReady = new Promise((resolve) => {
   releaseCapabilities = resolve;
 });
-const fixture = `<!doctype html><html><head><title>Installed Extension Fixture</title></head><body><main><h1>Installed extension fixture</h1><p>Verified local article for extraction.</p><form><label>Full name <input name="fullName" id="name"></label><button type="submit">Submit</button></form><div id="shadow"></div><iframe src="/frame" title="Fixture frame"></iframe></main><script>window.submissions=0;document.querySelector('form').addEventListener('submit',event=>{event.preventDefault();window.submissions++});document.querySelector('#shadow').attachShadow({mode:'open'}).innerHTML='<p>Shadow fixture content</p>';</script></body></html>`;
+const fixture = `<!doctype html><html><head><title>Installed Extension Fixture</title></head><body><main><h1>Installed extension fixture</h1><p>Verified local article for extraction.</p><form><label>Full name <input name="fullName" id="name"></label><button type="submit">Submit</button></form><button type="button" id="receipt-one">Receipt one</button><button type="button" id="receipt-two">Receipt two</button><a href="/receipt.pdf" download="receipt.pdf">Download receipt</a><div id="shadow"></div><iframe src="/frame" title="Fixture frame"></iframe></main><script>window.submissions=0;window.receipts=[];document.querySelector('form').addEventListener('submit',event=>{event.preventDefault();window.submissions++});document.querySelectorAll('[id^=receipt-]').forEach(button=>button.addEventListener('click',()=>window.receipts.push(button.id)));document.querySelector('#shadow').attachShadow({mode:'open'}).innerHTML='<p>Shadow fixture content</p>';</script></body></html>`;
+const receiptContent = "BT /F1 18 Tf 72 720 Td (Fixture receipt) Tj ET";
+const pdfObjects = [
+  "<< /Type /Catalog /Pages 2 0 R >>",
+  "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+  "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+  "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+  `<< /Length ${Buffer.byteLength(receiptContent)} >>\nstream\n${receiptContent}\nendstream`,
+];
+let receiptPdf = "%PDF-1.4\n";
+const pdfOffsets = pdfObjects.map((object, index) => {
+  const offset = Buffer.byteLength(receiptPdf);
+  receiptPdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  return offset;
+});
+const xrefOffset = Buffer.byteLength(receiptPdf);
+receiptPdf += `xref\n0 ${pdfOffsets.length + 1}\n0000000000 65535 f \n${pdfOffsets.map((offset) => `${String(offset).padStart(10, "0")} 00000 n \n`).join("")}trailer\n<< /Size ${pdfOffsets.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
 const fixtureServer = http.createServer((request, response) => {
+  if (request.url === "/receipt.pdf") {
+    response.setHeader("Content-Type", "application/pdf");
+    response.setHeader(
+      "Content-Disposition",
+      'attachment; filename="receipt.pdf"',
+    );
+    response.end(receiptPdf);
+    return;
+  }
   response.setHeader("Content-Type", "text/html; charset=utf-8");
   response.end(
     request.url === "/frame"
@@ -97,6 +122,28 @@ const bridgeServer = http.createServer(async (request, response) => {
     const payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));
     requests.push(payload);
     response.setHeader("Content-Type", "text/plain; charset=utf-8");
+    if (payload.messages.at(-1)?.content === "Download fixture receipt") {
+      const receiptRef = payload.pageContent.match(
+        /\[(f0:e\d+)\] link "Download receipt"/,
+      )?.[1];
+      assert(receiptRef, "Receipt download ref missing from snapshot");
+      response.end(`[ACTION: click, ref:${receiptRef}]`);
+      return;
+    }
+    if (
+      payload.messages.at(-1)?.content === "Open fixture receipt one" ||
+      payload.messages.at(-1)?.content === "Open fixture receipt two"
+    ) {
+      const number = payload.messages.at(-1).content.endsWith("one")
+        ? "one"
+        : "two";
+      const receiptRef = payload.pageContent.match(
+        new RegExp(`\\[(f0:e\\d+)\\] button "Receipt ${number}"`),
+      )?.[1];
+      assert(receiptRef, "Receipt button ref missing from snapshot");
+      response.end(`[ACTION: click, ref:${receiptRef}]`);
+      return;
+    }
     if (payload.messages.at(-1)?.content === "Edit both fixture labels") {
       const headingRef = payload.pageContent.match(
         /\[(f0:e\d+)\] heading "Installed extension fixture"/,
@@ -298,6 +345,58 @@ try {
     "Fixture post instruction",
   );
   assert.deepEqual(requests[0].context.allowedActions, []);
+  const pageStatus = panel.getByRole("region", { name: "Page context" });
+  const [statusBounds, originBounds] = await Promise.all([
+    pageStatus.getByRole("status").boundingBox(),
+    pageStatus.locator("[title]").first().boundingBox(),
+  ]);
+  assert(statusBounds && originBounds);
+  assert(
+    Math.abs(statusBounds.y - originBounds.y) < 3,
+    "Page status spans multiple rows",
+  );
+  const pageCount = context.pages().length;
+  await panel.getByRole("button", { name: "Report an issue" }).click();
+  const issueDialog = panel.getByRole("dialog", { name: "Report an issue" });
+  await issueDialog.waitFor();
+  assert.equal(
+    await issueDialog
+      .getByRole("button", { name: "Review on GitHub" })
+      .isDisabled(),
+    true,
+  );
+  await issueDialog.getByLabel("Title").fill("Fixture page read failure");
+  await issueDialog
+    .getByLabel("Steps to reproduce")
+    .fill("Read the fixture page");
+  await issueDialog.getByLabel("Actual").fill("No page content");
+  await issueDialog.getByText("Preview issue text").click();
+  assert(
+    !(await issueDialog.locator("pre").innerText()).includes(
+      new URL(fixtureUrl).origin,
+    ),
+  );
+  await issueDialog.getByLabel(/Include site origin/).check();
+  assert(
+    (await issueDialog.locator("pre").innerText()).includes(
+      new URL(fixtureUrl).origin,
+    ),
+  );
+  await panel.setViewportSize({ width: 320, height: 740 });
+  assert(
+    await panel.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+    "Issue dialog overflows a narrow sidepanel",
+  );
+  await panel.screenshot({
+    path: path.join(output, "installed-issue-mobile.png"),
+    animations: "disabled",
+  });
+  await panel.setViewportSize({ width: 480, height: 900 });
+  await panel.keyboard.press("Escape");
+  await issueDialog.waitFor({ state: "hidden" });
+  assert.equal(context.pages().length, pageCount);
   const frameDocuments = await worker.evaluate(async (tabId) => {
     const results = await chrome.scripting.executeScript({
       target: { tabId, allFrames: true },
@@ -366,6 +465,138 @@ try {
   await panel.getByText("Action details", { exact: true }).last().click();
   await panel.getByText(/Field value verified; not submitted/).waitFor();
   assert.equal(await source.locator("#name").inputValue(), "Installed Test");
+  assert.equal(await source.evaluate(() => window.submissions), 0);
+  await input.fill("Unsent draft");
+  await input.press("Home");
+  await input.press("ArrowUp");
+  assert.equal(await input.inputValue(), "Fill the fixture name");
+  await input.press("ArrowDown");
+  assert.equal(await input.inputValue(), "Unsent draft");
+  await input.fill("");
+  await panel
+    .getByLabel("Browser operation", { exact: true })
+    .selectOption("automation");
+  await input.fill("Open fixture receipt one");
+  await input.press("Enter");
+  await panel.getByRole("dialog", { name: "Approve browser action" }).waitFor();
+  assert.equal(
+    await panel
+      .getByRole("button", { name: "Cancel", exact: true })
+      .evaluate((button) => document.activeElement === button),
+    true,
+  );
+  assert.equal(await source.evaluate(() => window.receipts.length), 0);
+  await panel.getByRole("button", { name: "Always allow this site" }).click();
+  await source.waitForFunction(() => window.receipts.includes("receipt-one"));
+  await panel
+    .getByText(/outcome unverified/)
+    .last()
+    .waitFor({ state: "attached" });
+  await panel.getByRole("button", { name: "Send", exact: true }).waitFor();
+  assert.equal(await source.evaluate(() => window.submissions), 0);
+  await panel.reload();
+  await panel
+    .getByLabel("Browser operation", { exact: true })
+    .selectOption("automation");
+  const nextInput = panel.locator("form textarea").last();
+  await nextInput.fill("Open fixture receipt two");
+  await nextInput.press("Enter");
+  await source.waitForFunction(() => window.receipts.includes("receipt-two"));
+  await panel.getByRole("button", { name: "Send", exact: true }).waitFor();
+  assert.equal(
+    await panel.getByRole("dialog", { name: "Approve browser action" }).count(),
+    0,
+  );
+  assert.equal(await source.evaluate(() => window.submissions), 0);
+  await panel.getByText("Approved button sites", { exact: true }).click();
+  const revokeButton = panel.getByRole("button", {
+    name: `${new URL(fixtureUrl).origin} revoke permission`,
+  });
+  await revokeButton.click();
+  await revokeButton.waitFor({ state: "detached" });
+  const receiptsBeforeRejection = await source.evaluate(
+    () => window.receipts.length,
+  );
+  await nextInput.fill("Open fixture receipt one");
+  await nextInput.press("Enter");
+  await panel.getByRole("dialog", { name: "Approve browser action" }).waitFor();
+  await panel.keyboard.press("Shift+Tab");
+  assert.equal(
+    await panel
+      .getByRole("button", { name: "Always allow this site" })
+      .evaluate((button) => document.activeElement === button),
+    true,
+  );
+  await panel.keyboard.press("Tab");
+  assert.equal(
+    await panel
+      .getByRole("button", { name: "Cancel", exact: true })
+      .evaluate((button) => document.activeElement === button),
+    true,
+  );
+  await panel.keyboard.press("Escape");
+  await panel
+    .getByRole("dialog", { name: "Approve browser action" })
+    .waitFor({ state: "hidden" });
+  assert.equal(
+    await nextInput.evaluate((textarea) => document.activeElement === textarea),
+    true,
+  );
+  assert.equal(
+    await source.evaluate(() => window.receipts.length),
+    receiptsBeforeRejection,
+  );
+  assert.equal(await source.evaluate(() => window.submissions), 0);
+  const siteDownloadPromise = source.waitForEvent("download");
+  await nextInput.fill("Download fixture receipt");
+  await nextInput.press("Enter");
+  await panel.getByRole("dialog", { name: "Approve browser action" }).waitFor();
+  await panel.getByText("/receipt.pdf", { exact: true }).waitFor();
+  await panel.getByRole("button", { name: "Once", exact: true }).click();
+  const siteDownload = await siteDownloadPromise;
+  assert.equal(siteDownload.suggestedFilename(), "receipt.pdf");
+  const receiptDownload = await panel.evaluate(
+    () =>
+      new Promise((resolve, reject) => {
+        const cleanup = () => {
+          clearTimeout(timer);
+          chrome.downloads.onChanged.removeListener(check);
+        };
+        const timer = setTimeout(() => {
+          cleanup();
+          reject(new Error("Receipt download did not complete"));
+        }, 10000);
+        const check = () => {
+          void chrome.downloads
+            .search({})
+            .then((items) => {
+              const receipt = items.find((item) =>
+                item.filename.endsWith("receipt.pdf"),
+              );
+              if (receipt?.state === "complete") {
+                cleanup();
+                resolve({ filename: receipt.filename, state: receipt.state });
+              } else if (receipt?.state === "interrupted") {
+                cleanup();
+                reject(
+                  new Error(`Receipt download interrupted: ${receipt.error}`),
+                );
+              }
+            })
+            .catch(reject);
+        };
+        chrome.downloads.onChanged.addListener(check);
+        check();
+      }),
+  );
+  assert.equal(receiptDownload.state, "complete");
+  assert(
+    path.resolve(receiptDownload.filename).startsWith(downloads + path.sep),
+  );
+  const savedPdf = await fs.readFile(receiptDownload.filename, "utf8");
+  assert(savedPdf.startsWith("%PDF-1.4"));
+  assert(savedPdf.includes("(Fixture receipt)"));
+  assert(savedPdf.endsWith(`startxref\n${xrefOffset}\n%%EOF\n`));
   assert.equal(await source.evaluate(() => window.submissions), 0);
   await panel
     .getByText("Installed extension response.", { exact: true })
@@ -449,6 +680,10 @@ try {
   console.log(
     JSON.stringify({
       result: "PASS",
+      fixtureAnswerBytes: Buffer.byteLength(exported),
+      fixturePdfBytes: Buffer.byteLength(savedPdf),
+      fixtureDownloadSuggestedName: siteDownload.suggestedFilename(),
+      downloadFilesManagedByPlaywright: true,
       checks: [
         "actual MV3 service worker",
         "real extension storage",
@@ -459,6 +694,10 @@ try {
         "real background download",
         "document-bound input and read-back",
         "no form submission",
+        "compact one-line page status and prompt history draft restoration",
+        "issue preview keeps site origin opt-in and never opens GitHub before confirmation",
+        "button approval keyboard focus, Escape, persistent grant and revocation without submitting",
+        "approved same-origin download link yields a real fixture PDF without form submission",
         "two display edits in one action, undone together",
         "undo follows the edited tab and stays hidden on other tabs",
         "original page text sent to the selected model before display editing",

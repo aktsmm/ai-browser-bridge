@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { parseActionsFromResponse } from "./browser-actions";
+import { downloadTextFile, parseActionsFromResponse } from "./browser-actions";
 import {
   actionUsesPersonalProfile,
   browserActionAllowed,
   forgetDisplayEdits,
   hasUndoableDisplayEdit,
+  inspectButtonClick,
   parseFrameReference,
   resolveProfileValue,
   undoLastDisplayEdit,
@@ -190,6 +191,120 @@ describe("bound browser execution policy", () => {
   afterEach(() => vi.unstubAllGlobals());
 });
 
+describe("generated file download completion", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("waits for Chrome to complete before reporting the file as saved", async () => {
+    let onChanged:
+      | ((change: { id: number; state: { current: string } }) => void)
+      | undefined;
+    const search = vi
+      .fn()
+      .mockResolvedValueOnce([{ id: 7, state: "in_progress" }])
+      .mockResolvedValue([{ id: 7, state: "complete" }]);
+    const removeListener = vi.fn();
+    vi.stubGlobal("chrome", {
+      runtime: {
+        sendMessage: (
+          _message: unknown,
+          callback: (response: unknown) => void,
+        ) => callback({ success: true, downloadId: 7 }),
+      },
+      downloads: {
+        search,
+        onChanged: {
+          addListener: (listener: typeof onChanged) => {
+            onChanged = listener;
+          },
+          removeListener,
+        },
+      },
+    });
+    let settled = false;
+    const saved = downloadTextFile("receipt.md", "fixture").then((result) => {
+      settled = true;
+      return result;
+    });
+    await vi.waitFor(() => expect(search).toHaveBeenCalledOnce());
+    expect(settled).toBe(false);
+    onChanged?.({ id: 7, state: { current: "complete" } });
+    expect(await saved).toMatchObject({ success: true, downloadId: 7 });
+    expect(removeListener).toHaveBeenCalledOnce();
+  });
+
+  it.each(["complete", "interrupted"])(
+    "handles an already %s download without waiting for another event",
+    async (state) => {
+      const removeListener = vi.fn();
+      vi.stubGlobal("chrome", {
+        runtime: {
+          sendMessage: (
+            _message: unknown,
+            callback: (response: unknown) => void,
+          ) => callback({ success: true, downloadId: 8 }),
+        },
+        downloads: {
+          search: vi.fn().mockResolvedValue([{ id: 8, state }]),
+          onChanged: { addListener: vi.fn(), removeListener },
+        },
+      });
+      const result = await downloadTextFile("receipt.md", "fixture");
+      expect(result.success).toBe(state === "complete");
+      expect(result.error).toBe(
+        state === "interrupted" ? "Download was interrupted" : undefined,
+      );
+      expect(removeListener).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("reports a stalled download as a failure and releases its listener", async () => {
+    vi.useFakeTimers();
+    try {
+      const removeListener = vi.fn();
+      vi.stubGlobal("chrome", {
+        runtime: {
+          sendMessage: (
+            _message: unknown,
+            callback: (response: unknown) => void,
+          ) => callback({ success: true, downloadId: 9 }),
+        },
+        downloads: {
+          search: vi.fn().mockResolvedValue([{ id: 9, state: "in_progress" }]),
+          onChanged: { addListener: vi.fn(), removeListener },
+        },
+      });
+      const pending = downloadTextFile("receipt.md", "fixture");
+      await vi.advanceTimersByTimeAsync(30000);
+      expect(await pending).toMatchObject({
+        success: false,
+        error: "Download did not complete",
+      });
+      expect(removeListener).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects an invalid download id without starting a completion wait", async () => {
+    const search = vi.fn();
+    vi.stubGlobal("chrome", {
+      runtime: {
+        sendMessage: (
+          _message: unknown,
+          callback: (response: unknown) => void,
+        ) => callback({ success: true, downloadId: -1 }),
+      },
+      downloads: {
+        search,
+        onChanged: { addListener: vi.fn(), removeListener: vi.fn() },
+      },
+    });
+    const result = await downloadTextFile("receipt.md", "fixture");
+    expect(result.success).toBe(false);
+    expect(search).not.toHaveBeenCalled();
+  });
+});
+
 describe("parseActionsFromResponse security bounds", () => {
   afterEach(() => vi.unstubAllGlobals());
   const context = buildChatContext(
@@ -346,6 +461,295 @@ describe("parseActionsFromResponse security bounds", () => {
         { context, frames: [{ frameId: 0, documentId: "doc" }] },
       ),
     ).toContain("element not found");
+  });
+  it("clicks only an approved ordinary button, never a submission button", async () => {
+    class FakeButton {
+      textContent = "領収書表示";
+      type = "button";
+      disabled = false;
+      click = vi.fn();
+      getClientRects = () => [{}];
+      closest = () => null;
+    }
+    const button = new FakeButton();
+    vi.stubGlobal("HTMLLabelElement", class {});
+    vi.stubGlobal("HTMLButtonElement", FakeButton);
+    vi.stubGlobal("HTMLInputElement", class {});
+    vi.stubGlobal("HTMLAnchorElement", class {});
+    vi.stubGlobal("document", {
+      querySelectorAll: (selector: string) =>
+        selector === '[data-copilot-ref="e5"]' ? [button] : [],
+    });
+    vi.stubGlobal("chrome", {
+      tabs: {
+        get: vi.fn().mockResolvedValue({ url: "https://example.com/" }),
+      },
+      scripting: {
+        executeScript: vi.fn(async ({ func, args }) => [
+          { result: await func(...args) },
+        ]),
+      },
+    });
+    const automation = buildChatContext(
+      normalizeAssistantSettings({ mode: "automation" }),
+      context.target,
+      "ok",
+    );
+    const session = {
+      context: automation,
+      frames: [{ frameId: 0, documentId: "doc" }],
+    };
+    const action = { type: "click" as const, selector: "ref:e5" };
+    const preview = await inspectButtonClick(action, {
+      ...session,
+      frames: [
+        { frameId: 0, documentId: "doc", origin: "https://example.com" },
+      ],
+    });
+    expect(preview).toEqual({
+      selector: "ref:e5",
+      documentId: "doc",
+      origin: "https://example.com",
+      label: "領収書表示",
+    });
+    const controller = new AbortController();
+    const executeScript = chrome.scripting.executeScript as ReturnType<
+      typeof vi.fn
+    >;
+    executeScript.mockImplementationOnce(async ({ func, args }) => {
+      controller.abort();
+      return [{ result: await func(...args) }];
+    });
+    expect(
+      await inspectButtonClick(action, {
+        ...session,
+        signal: controller.signal,
+        frames: [
+          { frameId: 0, documentId: "doc", origin: "https://example.com" },
+        ],
+      }),
+    ).toBeNull();
+    expect(await executeBoundBrowserAction(action, session)).toContain(
+      "approval is required",
+    );
+    expect(button.click).not.toHaveBeenCalled();
+    expect(
+      await executeBoundBrowserAction(action, {
+        ...session,
+        approvedClick: {
+          selector: "ref:e5",
+          documentId: "doc",
+          label: "領収書表示",
+        },
+      }),
+    ).toContain("outcome unverified");
+    expect(button.click).toHaveBeenCalledOnce();
+    expect(
+      await executeBoundBrowserAction(action, {
+        ...session,
+        approvedClick: {
+          selector: "ref:e5",
+          documentId: "other-doc",
+          label: "領収書表示",
+        },
+      }),
+    ).toContain("Error");
+    expect(
+      await executeBoundBrowserAction(
+        { ...action, doubleClick: true },
+        {
+          ...session,
+          approvedClick: {
+            selector: "ref:e5",
+            documentId: "doc",
+            label: "領収書表示",
+          },
+        },
+      ),
+    ).toContain("Error");
+    expect(button.click).toHaveBeenCalledOnce();
+    button.textContent = "別のボタン";
+    expect(
+      await executeBoundBrowserAction(action, {
+        ...session,
+        approvedClick: {
+          selector: "ref:e5",
+          documentId: "doc",
+          label: "領収書表示",
+        },
+      }),
+    ).toContain("approved button changed");
+    button.disabled = true;
+    expect(
+      await inspectButtonClick(action, {
+        ...session,
+        frames: [
+          { frameId: 0, documentId: "doc", origin: "https://example.com" },
+        ],
+      }),
+    ).toBeNull();
+    button.disabled = false;
+    button.textContent = "送信";
+    expect(
+      await executeBoundBrowserAction(action, {
+        ...session,
+        approvedClick: { selector: "ref:e5", documentId: "doc", label: "送信" },
+      }),
+    ).toContain("Error");
+    expect(button.click).toHaveBeenCalledOnce();
+  });
+  it("requires site approval for same-origin download links and rejects foreign downloads", async () => {
+    class FakeAnchor {
+      href = "https://example.com/receipt.pdf";
+      textContent = "Download receipt";
+      target = "";
+      click = vi.fn();
+      getClientRects = () => [{}];
+      hasAttribute = (name: string): boolean => name === "download";
+      closest = () => null;
+    }
+    const link = new FakeAnchor();
+    vi.stubGlobal("HTMLLabelElement", class {});
+    vi.stubGlobal("HTMLAnchorElement", FakeAnchor);
+    vi.stubGlobal("HTMLInputElement", class {});
+    vi.stubGlobal("HTMLButtonElement", class {});
+    vi.stubGlobal("location", {
+      href: "https://example.com/",
+      origin: "https://example.com",
+    });
+    vi.stubGlobal("document", {
+      querySelectorAll: (selector: string) =>
+        selector === '[data-copilot-ref="e6"]' ? [link] : [],
+    });
+    vi.stubGlobal("chrome", {
+      tabs: { get: vi.fn().mockResolvedValue({ url: "https://example.com/" }) },
+      scripting: {
+        executeScript: vi.fn(async ({ func, args }) => [
+          { result: await func(...args) },
+        ]),
+      },
+    });
+    const session = {
+      context: buildChatContext(
+        normalizeAssistantSettings({ mode: "automation" }),
+        context.target,
+        "ok",
+      ),
+      frames: [
+        { frameId: 0, documentId: "doc", origin: "https://example.com" },
+      ],
+    };
+    const action = { type: "click" as const, selector: "ref:e6" };
+    expect(await inspectButtonClick(action, session)).toMatchObject({
+      label: "Download receipt",
+    });
+    expect(await executeBoundBrowserAction(action, session)).toContain(
+      "approval is required",
+    );
+    expect(link.click).not.toHaveBeenCalled();
+    expect(
+      await executeBoundBrowserAction(action, {
+        ...session,
+        approvedClick: {
+          selector: "ref:e6",
+          documentId: "doc",
+          label: "Download receipt",
+          href: link.href,
+        },
+      }),
+    ).toContain("outcome unverified");
+    expect(link.click).toHaveBeenCalledOnce();
+    link.href = "https://example.com/changed.pdf";
+    expect(
+      await executeBoundBrowserAction(action, {
+        ...session,
+        approvedClick: {
+          selector: "ref:e6",
+          documentId: "doc",
+          label: "Download receipt",
+          href: "https://example.com/receipt.pdf",
+        },
+      }),
+    ).toContain("Error");
+    expect(link.click).toHaveBeenCalledOnce();
+    link.href = "https://example.com/checkout?format=pdf";
+    expect(await inspectButtonClick(action, session)).toBeNull();
+    expect(
+      await executeBoundBrowserAction(action, {
+        ...session,
+        approvedClick: {
+          selector: "ref:e6",
+          documentId: "doc",
+          label: "Download receipt",
+          href: link.href,
+        },
+      }),
+    ).toContain("Error");
+    expect(link.click).toHaveBeenCalledOnce();
+    link.href = "https://example.com/%63heckout?format=pdf";
+    expect(await inspectButtonClick(action, session)).toBeNull();
+    expect(
+      await executeBoundBrowserAction(action, {
+        ...session,
+        approvedClick: {
+          selector: "ref:e6",
+          documentId: "doc",
+          label: "Download receipt",
+          href: link.href,
+        },
+      }),
+    ).toContain("Error");
+    expect(link.click).toHaveBeenCalledOnce();
+    link.hasAttribute = () => false;
+    expect(await executeBoundBrowserAction(action, session)).toContain(
+      "user action",
+    );
+    link.href = "https://example.com/%ZZ";
+    expect(await executeBoundBrowserAction(action, session)).toContain(
+      "user action",
+    );
+    link.hasAttribute = (name: string) => name === "download";
+    link.href = "https://other.example/receipt.pdf";
+    expect(await inspectButtonClick(action, session)).toBeNull();
+    expect(
+      await executeBoundBrowserAction(action, {
+        ...session,
+        approvedClick: {
+          selector: "ref:e6",
+          documentId: "doc",
+          label: "Download receipt",
+          href: "https://example.com/receipt.pdf",
+        },
+      }),
+    ).toContain("Error");
+    expect(link.click).toHaveBeenCalledOnce();
+  });
+  it("rejects URL-encoded destructive navigation without opening a new page", async () => {
+    const update = vi.fn();
+    vi.stubGlobal("chrome", {
+      tabs: {
+        get: vi.fn().mockResolvedValue({ url: "https://example.com/" }),
+        update,
+      },
+    });
+    const automation = buildChatContext(
+      normalizeAssistantSettings({ mode: "automation" }),
+      context.target,
+      "ok",
+    );
+    expect(
+      await executeBoundBrowserAction(
+        { type: "navigate", url: "https://example.com/%63heckout" },
+        { context: automation, frames: [] },
+      ),
+    ).toContain("user action");
+    expect(
+      await executeBoundBrowserAction(
+        { type: "navigate", url: "https://example.com/%ZZ" },
+        { context: automation, frames: [] },
+      ),
+    ).toContain("user action");
+    expect(update).not.toHaveBeenCalled();
   });
   it("edits one display element without returning its original text and undoes only unchanged edits", async () => {
     class FakeElement {

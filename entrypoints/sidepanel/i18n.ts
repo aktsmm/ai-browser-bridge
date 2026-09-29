@@ -46,11 +46,12 @@ export const translations = {
     fullAutoMigrationNotice:
       "ℹ️ UX改善のため初回のみフルオート設定へ移行しました（ブラウザ操作/高リスク操作）。Evaluate は既定で無効のままです。必要なら設定で変更できます。",
     loopContinuationPrompt:
-      "アクション実行結果 (Loop {loop}):\n{results}\n\n続けてください。エラーがあれば別の方法を試してください。完了したら「完了」と報告してください。",
+      "アクション実行結果 (Loop {loop}):\n{results}\n\n続けてください。エラーがあれば別の方法を試してください。保存完了の検証結果がないダウンロードは完了と報告しないでください。完了したら「完了」と報告してください。",
     showInFolder: "フォルダで表示",
     downloadFailedDefault: "ダウンロードに失敗しました",
     base64DecodeError: "Base64デコードエラー: {path}",
     downloadComplete: "ダウンロード完了",
+    downloadResults: "ファイル保存結果",
     downloadDestination: "保存先: ブラウザのダウンロードフォルダ",
     saveDestination: "保存先モード",
     saveDestinationDesc: "生成ファイルの保存先を選びます",
@@ -171,11 +172,12 @@ export const translations = {
     fullAutoMigrationNotice:
       "ℹ️ To improve UX, settings were migrated to full-auto once (Browser Actions / High-Risk Actions). Evaluate remains disabled by default. You can change it in Settings anytime.",
     loopContinuationPrompt:
-      'Action execution result (Loop {loop}):\n{results}\n\nPlease continue. If there are errors, try another approach. Report "completed" once finished.',
+      'Action execution result (Loop {loop}):\n{results}\n\nPlease continue. If there are errors, try another approach. Do not report a download as complete without a verified completion result. Report "completed" once finished.',
     showInFolder: "Show in folder",
     downloadFailedDefault: "Download failed",
     base64DecodeError: "Base64 decode error: {path}",
     downloadComplete: "Download complete",
+    downloadResults: "File save results",
     downloadDestination: "Saved to: browser downloads folder",
     saveDestination: "Save Destination",
     saveDestinationDesc: "Choose where generated files should be saved",

@@ -8,6 +8,7 @@ import {
 import { Settings } from "./components/Settings";
 import { Chat } from "./components/Chat";
 import { PageContextStatus } from "./components/PageContextStatus";
+import { IssueReportDialog } from "./components/IssueReportDialog";
 import type {
   LLMSettings,
   ChatMessage,
@@ -90,6 +91,7 @@ import {
   actionUsesPersonalProfile,
   forgetDisplayEdits,
   hasUndoableDisplayEdit,
+  inspectButtonClick,
   undoLastDisplayEdit,
 } from "./browser-execution";
 import { readPageWithRecovery, type PageContextResult } from "./page-context";
@@ -106,6 +108,7 @@ const DEFAULT_SETTINGS: LLMSettings = {
 };
 
 const DEFAULT_SAVE_RELATIVE_PATH = "output/blog";
+const APPROVED_BUTTON_ORIGINS_KEY = "approvedButtonOriginsV1";
 const HIGH_RISK_ACTION_TYPES: ReadonlySet<BrowserAction["type"]> = new Set([
   "newTab",
   "closeTab",
@@ -229,6 +232,7 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showIssueReport, setShowIssueReport] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
   const [modelFetchFailed, setModelFetchFailed] = useState(false);
@@ -244,6 +248,47 @@ export default function App() {
     string | null
   >(null);
   const [browserActionsEnabled, setBrowserActionsEnabled] = useState(true);
+  const [clickApproval, setClickApproval] = useState<{
+    origin: string;
+    label: string;
+    href?: string;
+  } | null>(null);
+  const [clickApprovalError, setClickApprovalError] = useState(false);
+  const [savingClickApproval, setSavingClickApproval] = useState(false);
+  const approvalCancelRef = useRef<HTMLButtonElement>(null);
+  const clickApprovalResolver = useRef<((approved: boolean) => void) | null>(
+    null,
+  );
+  useEffect(() => {
+    if (!clickApproval) return;
+    setClickApprovalError(false);
+    const previousFocus = document.activeElement;
+    approvalCancelRef.current?.focus();
+    return () => {
+      if (previousFocus instanceof HTMLElement && previousFocus.isConnected)
+        previousFocus.focus();
+    };
+  }, [clickApproval]);
+  const [approvedButtonOrigins, setApprovedButtonOrigins] = useState<
+    Record<string, boolean>
+  >({});
+  useEffect(() => {
+    void chrome.storage.local
+      .get(APPROVED_BUTTON_ORIGINS_KEY)
+      .then((stored) => {
+        const value = stored[APPROVED_BUTTON_ORIGINS_KEY];
+        if (value && typeof value === "object" && !Array.isArray(value))
+          setApprovedButtonOrigins(value as Record<string, boolean>);
+      });
+    return () => {
+      clickApprovalResolver.current?.(false);
+    };
+  }, []);
+  const resolveClickApproval = (approved: boolean) => {
+    clickApprovalResolver.current?.(approved);
+    clickApprovalResolver.current = null;
+    setClickApproval(null);
+  };
   const [displayEditingEnabled, setDisplayEditingEnabled] = useState(false);
   const activeDisplayEditRef = useRef(false);
   const [undoDisplayTabIds, setUndoDisplayTabIds] = useState<Set<number>>(
@@ -1887,11 +1932,60 @@ export default function App() {
               }
               // All modes now use improved local DOM operations
               // (Playwright-style: auto-wait, multiple click methods, etc.)
-              const result = await executeBrowserAction(action, {
+              const session = {
                 context,
                 frames: pageStateRef.current?.frames ?? [],
                 personal: personalForRun,
                 signal: abortControllerRef.current?.signal,
+              };
+              const button =
+                action.type === "click"
+                  ? await inspectButtonClick(action, session)
+                  : null;
+              let approvedClick: typeof button = null;
+              if (button) {
+                const stored = await chrome.storage.local.get(
+                  APPROVED_BUTTON_ORIGINS_KEY,
+                );
+                if (session.signal?.aborted) {
+                  actionResults.push("• Error: task cancelled");
+                  stopForReview = true;
+                  break;
+                }
+                const origins = stored[APPROVED_BUTTON_ORIGINS_KEY];
+                const approved =
+                  origins &&
+                  typeof origins === "object" &&
+                  !Array.isArray(origins) &&
+                  origins[button.origin] === true;
+                if (!approved) {
+                  const granted = await new Promise<boolean>((resolve) => {
+                    clickApprovalResolver.current = resolve;
+                    setClickApproval({
+                      origin: button.origin,
+                      label: button.label,
+                      href: button.href,
+                    });
+                  });
+                  if (!granted) {
+                    actionResults.push(
+                      "• Error: button click was not approved",
+                    );
+                    errorCount++;
+                    stopForReview = true;
+                    break;
+                  }
+                }
+                if (session.signal?.aborted) {
+                  actionResults.push("• Error: task cancelled");
+                  stopForReview = true;
+                  break;
+                }
+                approvedClick = button;
+              }
+              const result = await executeBrowserAction(action, {
+                ...session,
+                approvedClick: approvedClick ?? undefined,
               });
               if (
                 action.type === "replaceText" &&
@@ -2214,6 +2308,7 @@ export default function App() {
         !abortControllerRef.current?.signal.aborted
       ) {
         const downloadResults: string[] = [];
+        const downloadDestinations = new Set<string>();
         const processedFileMarkers = new Set<string>();
 
         const decodeBase64Utf8 = (b64: string) => {
@@ -2247,6 +2342,8 @@ export default function App() {
                   ? ` ([${t("showInFolder", language)}](download-show:${result.downloadId}))`
                   : "";
                 downloadResults.push(`• ✓ ${result.filename}${showLink}`);
+                if (result.destinationMessage)
+                  downloadDestinations.add(result.destinationMessage);
               } else {
                 downloadResults.push(
                   `• ✗ ${result.filename}: ${result.error || t("downloadFailedDefault", language)}`,
@@ -2279,6 +2376,8 @@ export default function App() {
                 ? ` ([${t("showInFolder", language)}](download-show:${result.downloadId}))`
                 : "";
               downloadResults.push(`• ✓ ${result.filename}${showLink}`);
+              if (result.destinationMessage)
+                downloadDestinations.add(result.destinationMessage);
             } else {
               downloadResults.push(
                 `• ✗ ${result.filename}: ${result.error || t("downloadFailedDefault", language)}`,
@@ -2288,11 +2387,15 @@ export default function App() {
         }
 
         if (downloadResults.length > 0) {
+          const allSaved = downloadResults.every((result) =>
+            result.startsWith("• ✓"),
+          );
+          const destinations = [...downloadDestinations].join("\n📂 ");
           setMessages((prev: ChatMessage[]) => [
             ...prev,
             {
               role: "assistant",
-              content: `📥 ${t("downloadComplete", language)}:\n${downloadResults.join("\n")}\n\n📂 ${t("downloadDestination", language)}`,
+              content: `📥 ${t(allSaved ? "downloadComplete" : "downloadResults", language)}:\n${downloadResults.join("\n")}${destinations ? `\n\n📂 ${destinations}` : ""}`,
               kind: "notice",
             },
           ]);
@@ -2387,6 +2490,7 @@ export default function App() {
   ]);
 
   const stopGeneration = () => {
+    resolveClickApproval(false);
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
@@ -2431,6 +2535,144 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-full min-w-0 bg-gray-50">
+      {clickApproval && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={
+              language === "ja"
+                ? "ブラウザ操作の許可"
+                : "Approve browser action"
+            }
+            onKeyDown={(event) => {
+              if (
+                event.key === "Escape" &&
+                !event.nativeEvent.isComposing &&
+                !savingClickApproval
+              ) {
+                event.preventDefault();
+                resolveClickApproval(false);
+              }
+              if (event.key === "Tab") {
+                const buttons = Array.from(
+                  event.currentTarget.querySelectorAll<HTMLButtonElement>(
+                    "button:not([disabled])",
+                  ),
+                );
+                const first = buttons[0];
+                const last = buttons.at(-1);
+                if (event.shiftKey && document.activeElement === first) {
+                  event.preventDefault();
+                  last?.focus();
+                } else if (!event.shiftKey && document.activeElement === last) {
+                  event.preventDefault();
+                  first?.focus();
+                }
+              }
+            }}
+            className="w-full max-w-sm bg-white border p-4 space-y-3 shadow-lg"
+          >
+            <h2 className="font-semibold text-sm">
+              {clickApproval.href
+                ? language === "ja"
+                  ? "ダウンロードの確認"
+                  : "Confirm download"
+                : language === "ja"
+                  ? "ボタン操作の確認"
+                  : "Confirm button click"}
+            </h2>
+            <p className="text-sm break-words">{clickApproval.label}</p>
+            {clickApproval.href && (
+              <p className="text-xs break-all text-gray-600">
+                {new URL(clickApproval.href).pathname}
+              </p>
+            )}
+            <p className="text-xs break-all text-gray-600">
+              {clickApproval.origin}
+            </p>
+            <p className="text-xs text-gray-600">
+              {language === "ja"
+                ? "許可するとサイトの操作が実行されます。常に許可はこのサイトの通常ボタンとダウンロードリンクに適用されます。"
+                : "The site's action will run. Always allow applies to ordinary buttons and download links on this site."}
+            </p>
+            {clickApprovalError && (
+              <p role="alert" className="text-xs text-red-700">
+                {language === "ja"
+                  ? "許可を保存できませんでした。再試行するか、今回だけ許可してください。"
+                  : "Could not save permission. Retry or allow this click only."}
+              </p>
+            )}
+            <div className="flex flex-wrap gap-2 justify-end">
+              <button
+                ref={approvalCancelRef}
+                type="button"
+                disabled={savingClickApproval}
+                className="border px-2 py-1 text-sm focus-visible:ring-2 focus-visible:ring-green-700"
+                onClick={() => resolveClickApproval(false)}
+              >
+                {language === "ja" ? "キャンセル" : "Cancel"}
+              </button>
+              <button
+                type="button"
+                disabled={savingClickApproval}
+                className="border px-2 py-1 text-sm"
+                onClick={() => resolveClickApproval(true)}
+              >
+                {language === "ja" ? "今回だけ" : "Once"}
+              </button>
+              <button
+                type="button"
+                disabled={savingClickApproval}
+                className="bg-green-700 text-white px-2 py-1 text-sm"
+                onClick={async () => {
+                  const origin = clickApproval.origin;
+                  setSavingClickApproval(true);
+                  setClickApprovalError(false);
+                  try {
+                    const stored = await chrome.storage.local.get(
+                      APPROVED_BUTTON_ORIGINS_KEY,
+                    );
+                    const current = stored[APPROVED_BUTTON_ORIGINS_KEY];
+                    const next = {
+                      ...(current &&
+                      typeof current === "object" &&
+                      !Array.isArray(current)
+                        ? current
+                        : {}),
+                      [origin]: true,
+                    };
+                    await chrome.storage.local.set({
+                      [APPROVED_BUTTON_ORIGINS_KEY]: next,
+                    });
+                    setApprovedButtonOrigins(next);
+                    resolveClickApproval(true);
+                  } catch {
+                    setClickApprovalError(true);
+                    approvalCancelRef.current?.focus();
+                  } finally {
+                    setSavingClickApproval(false);
+                  }
+                }}
+              >
+                {language === "ja"
+                  ? "このサイトを常に許可"
+                  : "Always allow this site"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {showIssueReport && (
+        <IssueReportDialog
+          version={chrome.runtime.getManifest().version}
+          mode={assistantSettings.mode}
+          status={pageState?.status ?? "unknown"}
+          origin={pageOrigin}
+          language={language}
+          onClose={() => setShowIssueReport(false)}
+        />
+      )}
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-2 bg-white border-b">
         <div className="flex items-center gap-2 min-w-0">
@@ -2444,6 +2686,15 @@ export default function App() {
           />
         </div>
         <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setShowIssueReport(true)}
+            className="w-8 h-8 flex items-center justify-center text-sm font-semibold text-gray-600 hover:bg-gray-100 rounded focus-visible:ring-2 focus-visible:ring-green-700"
+            title={language === "ja" ? "Issue を報告" : "Report an issue"}
+            aria-label={language === "ja" ? "Issue を報告" : "Report an issue"}
+          >
+            !
+          </button>
           <button
             onClick={() => {
               void checkConnection();
@@ -2641,6 +2892,54 @@ export default function App() {
             <option value="input">Assist with input</option>
             <option value="automation">Browser automation</option>
           </select>
+          {Object.entries(approvedButtonOrigins).filter(
+            ([, approved]) => approved === true,
+          ).length > 0 && (
+            <details className="text-xs max-w-full">
+              <summary className="cursor-pointer">
+                {language === "ja"
+                  ? "ボタン操作の許可サイト"
+                  : "Approved button sites"}
+              </summary>
+              {Object.entries(approvedButtonOrigins)
+                .filter(([, approved]) => approved === true)
+                .map(([origin]) => (
+                  <div
+                    key={origin}
+                    className="flex items-center gap-2 max-w-full"
+                  >
+                    <span className="truncate" title={origin}>
+                      {origin}
+                    </span>
+                    <button
+                      type="button"
+                      className="text-red-700 shrink-0"
+                      aria-label={`${origin} ${language === "ja" ? "の許可を解除" : "revoke permission"}`}
+                      onClick={async () => {
+                        const stored = await chrome.storage.local.get(
+                          APPROVED_BUTTON_ORIGINS_KEY,
+                        );
+                        const current = stored[APPROVED_BUTTON_ORIGINS_KEY];
+                        const next = {
+                          ...(current &&
+                          typeof current === "object" &&
+                          !Array.isArray(current)
+                            ? current
+                            : {}),
+                        };
+                        delete next[origin];
+                        await chrome.storage.local.set({
+                          [APPROVED_BUTTON_ORIGINS_KEY]: next,
+                        });
+                        setApprovedButtonOrigins(next);
+                      }}
+                    >
+                      {language === "ja" ? "解除" : "Revoke"}
+                    </button>
+                  </div>
+                ))}
+            </details>
+          )}
           <label className="flex items-center gap-1">
             <input
               type="checkbox"

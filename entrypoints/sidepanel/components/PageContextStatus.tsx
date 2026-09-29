@@ -38,13 +38,13 @@ export function PageContextStatus({
   return (
     <section
       aria-label={language === "ja" ? "ページ情報" : "Page context"}
-      className="px-4 py-2 border-t bg-gray-50 min-w-0"
+      className="px-3 py-1 border-t bg-gray-50 min-w-0"
     >
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex items-center gap-2 min-w-0">
         <div
           role="status"
           aria-live="polite"
-          className="text-xs min-w-0 break-words"
+          className="text-xs shrink-0 max-w-[45%] truncate"
         >
           {reading
             ? language === "ja"
@@ -56,23 +56,35 @@ export function PageContextStatus({
                 ? "ページ未取得"
                 : "Page not read"}
         </div>
+        {origin && (
+          <div
+            className="text-xs text-gray-500 min-w-0 flex-1 truncate"
+            title={origin}
+          >
+            {origin}
+          </div>
+        )}
         {state &&
           ["empty", "permission-required", "failed"].includes(state.status) && (
             <button
               type="button"
               disabled={busy}
               onClick={onRead}
+              title={
+                state.status === "permission-required"
+                  ? language === "ja"
+                    ? "拡張機能メニューでサイトへのアクセスを許可してから再読み取り"
+                    : "Allow site access in the extension menu, then retry"
+                  : undefined
+              }
               className="shrink-0 text-xs text-blue-700 underline disabled:opacity-40 focus-visible:ring-2 focus-visible:ring-blue-500"
             >
               {language === "ja" ? "再読み取り" : "Retry reading"}
             </button>
           )}
       </div>
-      {origin && (
-        <div className="mt-1 text-xs text-gray-500 break-all">{origin}</div>
-      )}
       {state?.status === "permission-required" && (
-        <div className="mt-1 text-xs text-gray-500">
+        <div className="sr-only">
           {language === "ja"
             ? "ブラウザの拡張機能メニューでこのサイトへのアクセスを許可し、再読み取りしてください。"
             : "Allow site access in the browser's extension menu, then retry reading."}

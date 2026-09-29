@@ -2,6 +2,7 @@ import type { BrowserAction, FormField } from "./types";
 import { BRIDGE_CLIENT_HEADERS } from "./constants";
 import { normalizeServerPort } from "./server-port";
 import { normalizeDownloadRelativePath } from "./save-path";
+import { isValidDownloadId } from "./download-id";
 import { getEvaluateBlockedMessage } from "./evaluate-policy";
 import {
   browserActionAllowed,
@@ -1845,6 +1846,34 @@ export interface FileActionResult {
   error?: string;
 }
 
+async function waitForDownload(downloadId: number): Promise<string | null> {
+  return new Promise((resolve) => {
+    let finished = false;
+    const finish = (error: string | null) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      chrome.downloads.onChanged.removeListener(onChanged);
+      resolve(error);
+    };
+    const onChanged = (change: chrome.downloads.DownloadDelta) => {
+      if (change.id !== downloadId) return;
+      if (change.state?.current === "complete") finish(null);
+      if (change.state?.current === "interrupted")
+        finish("Download was interrupted");
+    };
+    const timer = setTimeout(() => finish("Download did not complete"), 30000);
+    chrome.downloads.onChanged.addListener(onChanged);
+    void chrome.downloads.search({ id: downloadId }).then(
+      ([item]) => {
+        if (item?.state === "complete") finish(null);
+        if (item?.state === "interrupted") finish("Download was interrupted");
+      },
+      () => finish("Download status could not be checked"),
+    );
+  });
+}
+
 export async function downloadTextFile(
   filename: string,
   content: string,
@@ -1869,12 +1898,19 @@ export async function downloadTextFile(
             filename,
             error: chrome.runtime.lastError.message,
           });
-        } else if (response?.success) {
-          resolve({
-            success: true,
-            filename,
-            downloadId: response.downloadId,
-          });
+        } else if (
+          response?.success &&
+          isValidDownloadId(response.downloadId)
+        ) {
+          const downloadId = response.downloadId;
+          void waitForDownload(downloadId).then((error) =>
+            resolve({
+              success: !error,
+              filename,
+              downloadId,
+              error: error ?? undefined,
+            }),
+          );
         } else {
           resolve({
             success: false,

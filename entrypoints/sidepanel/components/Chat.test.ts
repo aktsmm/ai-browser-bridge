@@ -10,9 +10,106 @@ import {
   separateToolLogs,
   shouldSubmitChat,
   isNearConversationEnd,
+  appendPromptHistory,
+  stepPromptHistory,
 } from "./Chat";
 import { getDownloadShowId } from "../download-id";
 import { isAssistantAnswer } from "../types";
+import { PageContextStatus } from "./PageContextStatus";
+import { buildIssueUrl } from "./IssueReportDialog";
+
+describe("PageContextStatus", () => {
+  it("keeps status, truncated origin and retry in one compact row", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(PageContextStatus, {
+        state: {
+          status: "empty",
+          content: "",
+          capturedAt: 1,
+          frames: [],
+        },
+        origin: "https://rsvh.travel.rakuten.co.jp",
+        language: "ja",
+        busy: false,
+        onRead: vi.fn(),
+      }),
+    );
+    expect(html).toContain('title="https://rsvh.travel.rakuten.co.jp"');
+    expect(html).toContain("truncate");
+    expect(html).toContain("読み取れる内容がありません");
+    expect(html).toContain("再読み取り");
+    expect(html).not.toContain("mt-1");
+  });
+});
+
+describe("prompt history", () => {
+  it("retains only the 15 most recent sent prompts without adjacent duplicates", () => {
+    let history: string[] = [];
+    for (let index = 1; index <= 16; index++)
+      history = appendPromptHistory(history, `Prompt ${index}`);
+    expect(history).toHaveLength(15);
+    expect(history[0]).toBe("Prompt 2");
+    expect(appendPromptHistory(history, "Prompt 16")).toEqual(history);
+  });
+
+  it("walks upward through sent prompts and downward to the unsent draft", () => {
+    const history = ["First", "Second"];
+    expect(stepPromptHistory(history, null, "Draft", "up")).toEqual({
+      index: 1,
+      value: "Second",
+    });
+    expect(stepPromptHistory(history, 1, "Draft", "up")).toEqual({
+      index: 0,
+      value: "First",
+    });
+    expect(stepPromptHistory(history, 0, "Draft", "up")).toEqual({
+      index: 0,
+      value: "First",
+    });
+    expect(stepPromptHistory(history, 1, "Draft", "down")).toEqual({
+      index: null,
+      value: "Draft",
+    });
+    expect(stepPromptHistory(history, null, "Draft", "down")).toBeNull();
+  });
+});
+
+describe("issue report preview", () => {
+  it("includes only the user's report and minimal extension metadata by default", () => {
+    const report = {
+      title: "Page read fails",
+      steps: "Open the travel page, then read it",
+      expected: "Page text appears",
+      actual: "No readable content",
+      version: "0.1.25",
+      mode: "automation",
+      status: "empty",
+      origin: "https://private.example",
+      includeOrigin: false,
+    };
+    const url = new URL(buildIssueUrl(report));
+    expect(url.origin).toBe("https://github.com");
+    expect(url.pathname).toBe("/aktsmm/ai-browser-bridge/issues/new");
+    expect(url.searchParams.get("title")).toBe(report.title);
+    expect(url.searchParams.get("body")).toContain(report.steps);
+    expect(url.searchParams.get("body")).toContain("Version: 0.1.25");
+    expect(url.searchParams.get("body")).not.toContain(report.origin);
+    expect(
+      new URL(
+        buildIssueUrl({ ...report, includeOrigin: true }),
+      ).searchParams.get("body"),
+    ).toContain(report.origin);
+    expect(
+      buildIssueUrl({
+        ...report,
+        title: "不".repeat(120),
+        steps: "不".repeat(1500),
+        expected: "不".repeat(1500),
+        actual: "不".repeat(1500),
+      }).length,
+    ).toBeLessThan(8000);
+  });
+});
 
 describe("getQuickActions", () => {
   it("offers saving on each answer even after a later reply or notice", () => {

@@ -9,6 +9,12 @@ export interface BrowserSession {
   frames: { frameId: number; documentId?: string; origin?: string }[];
   personal?: Record<string, string>;
   signal?: AbortSignal;
+  approvedClick?: {
+    selector: string;
+    documentId: string;
+    label: string;
+    href?: string;
+  };
 }
 
 interface DisplayEdit {
@@ -153,6 +159,119 @@ export function resolveProfileValue(
   return personal[match[1]];
 }
 
+export async function inspectButtonClick(
+  action: Extract<BrowserAction, { type: "click" }>,
+  session: BrowserSession,
+): Promise<{
+  selector: string;
+  documentId: string;
+  label: string;
+  origin: string;
+  href?: string;
+} | null> {
+  if (
+    session.context.mode !== "automation" ||
+    !browserActionAllowed(action, session.context) ||
+    action.doubleClick ||
+    (action.button && action.button !== "left") ||
+    action.modifiers?.length
+  )
+    return null;
+  const target = session.context.target!;
+  if (
+    (await chrome.tabs.get(target.tabId)).url !== target.url ||
+    session.signal?.aborted
+  )
+    return null;
+  const reference = parseFrameReference(action.selector);
+  const frame = session.frames.find(
+    (item) => item.frameId === reference.frameId,
+  );
+  if (!frame?.documentId || !frame.origin) return null;
+  const result = await chrome.scripting.executeScript({
+    target: { tabId: target.tabId, documentIds: [frame.documentId] },
+    func: (selector: string) => {
+      const restrictedPath = (pathname: string) => {
+        try {
+          return /(?:delete|logout|unsubscribe|checkout|purchase)/i.test(
+            decodeURIComponent(pathname),
+          );
+        } catch {
+          return true;
+        }
+      };
+      const ref = selector.match(/^(?:ref:)?(e\d+)$/i);
+      if (!ref) return null;
+      const roots: (Document | ShadowRoot)[] = [document];
+      for (let index = 0; index < roots.length && roots.length < 100; index++) {
+        roots[index].querySelectorAll("*").forEach((element) => {
+          if (element.shadowRoot && roots.length < 100)
+            roots.push(element.shadowRoot);
+        });
+      }
+      const matches = roots.flatMap((root) =>
+        Array.from(
+          root.querySelectorAll(`[data-copilot-ref="${ref[1].toLowerCase()}"]`),
+        ),
+      );
+      if (matches.length !== 1) return null;
+      const element =
+        matches[0] instanceof HTMLLabelElement
+          ? (matches[0].control ?? matches[0])
+          : matches[0];
+      if (!element.getClientRects().length) return null;
+      const ordinaryButton =
+        (element instanceof HTMLButtonElement && element.type === "button") ||
+        (element instanceof HTMLInputElement && element.type === "button");
+      const downloadUrl =
+        element instanceof HTMLAnchorElement
+          ? new URL(element.href, location.href)
+          : null;
+      const downloadLink =
+        downloadUrl &&
+        Boolean((element as HTMLAnchorElement).href) &&
+        element.hasAttribute("download") &&
+        (!(element as HTMLAnchorElement).target ||
+          (element as HTMLAnchorElement).target === "_self") &&
+        ["https:", "http:", "blob:"].includes(downloadUrl.protocol) &&
+        downloadUrl.origin === location.origin &&
+        !restrictedPath(downloadUrl.pathname);
+      if (
+        (!ordinaryButton && !downloadLink) ||
+        (element as HTMLButtonElement).disabled
+      )
+        return null;
+      const label =
+        (element instanceof HTMLInputElement
+          ? element.value
+          : element.textContent
+        )
+          ?.trim()
+          .replace(/\s+/g, " ")
+          .slice(0, 120) ?? "";
+      return label &&
+        !/(?:submit|send|publish|purchase|buy|checkout|pay|delete|remove|logout|unsubscribe|upload|送信|投稿|公開|購入|決済|支払|削除|退会|ログアウト|アップロード)/i.test(
+          label,
+        )
+        ? downloadLink
+          ? { label, href: downloadUrl!.href }
+          : { label }
+        : null;
+    },
+    args: [reference.selector],
+  });
+  const inspection = result[0]?.result;
+  if (session.signal?.aborted) return null;
+  return inspection && typeof inspection.label === "string"
+    ? {
+        selector: reference.selector,
+        documentId: frame.documentId,
+        ...inspection,
+        origin: frame.origin,
+      }
+    : null;
+}
+
 export async function executeBoundBrowserAction(
   action: BrowserAction,
   session: BrowserSession,
@@ -172,11 +291,17 @@ export async function executeBoundBrowserAction(
     } catch {
       return "Error: invalid navigation URL";
     }
+    let pathname: string;
+    try {
+      pathname = decodeURIComponent(url.pathname);
+    } catch {
+      return "Error: navigation requires user action";
+    }
     if (
       !["https:", "http:"].includes(url.protocol) ||
       url.username ||
       url.password ||
-      /(?:delete|logout|unsubscribe|checkout|purchase)/i.test(url.pathname)
+      /(?:delete|logout|unsubscribe|checkout|purchase)/i.test(pathname)
     )
       return "Error: navigation requires user action";
     if (
@@ -250,7 +375,20 @@ export async function executeBoundBrowserAction(
   const editId = prepared.type === "replaceText" ? crypto.randomUUID() : "";
   const results = await chrome.scripting.executeScript({
     target: { tabId: target.tabId, documentIds: [documentId] },
-    func: async (command: BrowserAction, editId: string) => {
+    func: async (
+      command: BrowserAction,
+      editId: string,
+      approvedClick: BrowserSession["approvedClick"] | null,
+    ) => {
+      const restrictedPath = (pathname: string) => {
+        try {
+          return /(?:delete|logout|unsubscribe|checkout|purchase)/i.test(
+            decodeURIComponent(pathname),
+          );
+        } catch {
+          return true;
+        }
+      };
       const roots: (Document | ShadowRoot)[] = [document];
       for (
         let rootIndex = 0;
@@ -480,20 +618,72 @@ export async function executeBoundBrowserAction(
         }
         if (element instanceof HTMLAnchorElement && element.href) {
           const url = new URL(element.href, location.href);
-          if (
-            url.origin !== location.origin ||
-            /(?:delete|logout|unsubscribe|checkout|purchase)/i.test(
-              url.pathname,
-            ) ||
-            element.hasAttribute("download")
-          )
+          if (element.hasAttribute("download")) {
+            const label = element.textContent
+              ?.trim()
+              .replace(/\s+/g, " ")
+              .slice(0, 120);
+            if (!approvedClick)
+              return "Error: download link approval is required in Browser automation";
+            if (
+              approvedClick.selector !== command.selector ||
+              approvedClick.href !== url.href ||
+              approvedClick.label !== label ||
+              command.doubleClick ||
+              (command.button && command.button !== "left") ||
+              command.modifiers?.length ||
+              (element.target && element.target !== "_self") ||
+              !["https:", "http:", "blob:"].includes(url.protocol) ||
+              url.origin !== location.origin ||
+              restrictedPath(url.pathname) ||
+              /(?:submit|send|publish|purchase|buy|checkout|pay|delete|remove|logout|unsubscribe|upload|送信|投稿|公開|購入|決済|支払|削除|退会|ログアウト|アップロード)/i.test(
+                label ?? "",
+              )
+            )
+              return "Error: download link requires approval or changed; refresh page context";
+            element.click();
+            return "Download requested; outcome unverified, check browser downloads";
+          }
+          if (url.origin !== location.origin || restrictedPath(url.pathname))
             return "Error: this link requires user action";
           if (element.target && element.target !== "_self")
             return "Error: opening another tab requires user action";
           location.assign(url.href);
           return "Link activated; refresh context to verify navigation";
         }
-        return "Error: button effect cannot be verified safely; click it manually, then continue";
+        const label =
+          (element instanceof HTMLInputElement
+            ? element.value
+            : element.textContent
+          )
+            ?.trim()
+            .replace(/\s+/g, " ")
+            .slice(0, 120) ?? "";
+        const ordinaryButton =
+          (element instanceof HTMLButtonElement && element.type === "button") ||
+          (element instanceof HTMLInputElement && element.type === "button");
+        if (
+          !ordinaryButton ||
+          !label ||
+          /(?:submit|send|publish|purchase|buy|checkout|pay|delete|remove|logout|unsubscribe|upload|送信|投稿|公開|購入|決済|支払|削除|退会|ログアウト|アップロード)/i.test(
+            label,
+          )
+        )
+          return "Error: this button requires user action";
+        if (!approvedClick)
+          return "Error: button approval is required in Browser automation";
+        if (
+          approvedClick.selector !== command.selector ||
+          approvedClick.label !== label ||
+          command.doubleClick ||
+          (command.button && command.button !== "left") ||
+          command.modifiers?.length ||
+          (element as HTMLButtonElement).disabled ||
+          element.closest("[disabled], [aria-disabled='true']")
+        )
+          return "Error: approved button changed or became unavailable; refresh page context";
+        (element as HTMLElement).click();
+        return "Clicked approved button; outcome unverified, refresh page context to check";
       }
       if (command.type === "focus" || command.type === "hover") {
         if (forbidden(element)) return "Error: restricted field";
@@ -519,7 +709,16 @@ export async function executeBoundBrowserAction(
         ? "Field value verified; not submitted"
         : "Error: field value did not persist; inspect before retrying";
     },
-    args: [prepared, editId],
+    args: [
+      prepared,
+      editId,
+      prepared.type === "click" &&
+      session.context.mode === "automation" &&
+      session.approvedClick?.selector === prepared.selector &&
+      session.approvedClick.documentId === documentId
+        ? session.approvedClick
+        : null,
+    ],
   });
   const result = results[0]?.result;
   if (

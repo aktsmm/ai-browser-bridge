@@ -83,7 +83,7 @@ export async function readPageWithRecovery(
 ): Promise<PageContextResult> {
   try {
     let result = combinePageFrames(await read());
-    if (result.status === "empty") {
+    for (let retry = 0; retry < 2 && result.status === "empty"; retry++) {
       await waitForReady();
       result = combinePageFrames(await read());
     }

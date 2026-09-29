@@ -182,6 +182,32 @@ interface ChatProps {
   onSaveBlogDraft: (message: ChatMessage) => void | Promise<boolean>;
 }
 
+export function appendPromptHistory(
+  history: string[],
+  prompt: string,
+): string[] {
+  const value = prompt.trim();
+  return !value || history.at(-1) === value
+    ? history
+    : [...history, value].slice(-15);
+}
+
+export function stepPromptHistory(
+  history: string[],
+  index: number | null,
+  draft: string,
+  direction: "up" | "down",
+): { index: number | null; value: string } | null {
+  if (!history.length || (direction === "down" && index === null)) return null;
+  const next =
+    direction === "up"
+      ? Math.max(0, (index ?? history.length) - 1)
+      : index! + 1;
+  return next === history.length
+    ? { index: null, value: draft }
+    : { index: next, value: history[next] };
+}
+
 export function isNearConversationEnd(metrics: {
   scrollHeight: number;
   scrollTop: number;
@@ -224,6 +250,9 @@ export function Chat({
   const saveInFlightRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const promptHistoryRef = useRef<string[]>([]);
+  const historyIndexRef = useRef<number | null>(null);
+  const draftBeforeHistoryRef = useRef("");
   const copiedTimerRef = useRef<number | null>(null);
   const dragDepthRef = useRef(0);
 
@@ -415,6 +444,12 @@ export function Chat({
     ) {
       followLatest();
       onSendMessage(input, pendingAttachments);
+      promptHistoryRef.current = appendPromptHistory(
+        promptHistoryRef.current,
+        input,
+      );
+      historyIndexRef.current = null;
+      draftBeforeHistoryRef.current = "";
       setInput("");
       setPendingAttachments([]);
       setAttachmentError("");
@@ -425,10 +460,49 @@ export function Chat({
   const handleClear = () => {
     followLatest();
     onClearMessages();
+    promptHistoryRef.current = [];
+    historyIndexRef.current = null;
     inputRef.current?.focus();
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (
+      (e.key === "ArrowUp" || e.key === "ArrowDown") &&
+      !e.nativeEvent.isComposing &&
+      e.nativeEvent.keyCode !== 229 &&
+      !e.altKey &&
+      !e.ctrlKey &&
+      !e.metaKey
+    ) {
+      if (
+        e.key === "ArrowUp" &&
+        historyIndexRef.current === null &&
+        (e.currentTarget.selectionStart !== 0 ||
+          e.currentTarget.selectionEnd !== 0 ||
+          input.includes("\n"))
+      )
+        return;
+      if (historyIndexRef.current === null)
+        draftBeforeHistoryRef.current = input;
+      const result = stepPromptHistory(
+        promptHistoryRef.current,
+        historyIndexRef.current,
+        draftBeforeHistoryRef.current,
+        e.key === "ArrowUp" ? "up" : "down",
+      );
+      if (result) {
+        e.preventDefault();
+        historyIndexRef.current = result.index;
+        setInput(result.value);
+        requestAnimationFrame(() =>
+          inputRef.current?.setSelectionRange(
+            result.index === null ? result.value.length : 0,
+            result.index === null ? result.value.length : 0,
+          ),
+        );
+        return;
+      }
+    }
     if (
       shouldSubmitChat({
         key: e.key,
@@ -991,7 +1065,10 @@ export function Chat({
           <textarea
             ref={inputRef}
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => {
+              historyIndexRef.current = null;
+              setInput(e.target.value);
+            }}
             onKeyDown={handleKeyDown}
             placeholder={t("inputPlaceholder", language)}
             aria-label={t("inputPlaceholder", language)}

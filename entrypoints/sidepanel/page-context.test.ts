@@ -53,6 +53,24 @@ describe("page context", () => {
     expect(read).toHaveBeenCalledTimes(2);
     expect(wait).toHaveBeenCalledOnce();
   });
+  it("does not label a late-loading page empty after a second empty snapshot", async () => {
+    const read = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([frame]);
+    const wait = vi.fn().mockResolvedValue(undefined);
+    expect((await readPageWithRecovery(read, wait)).status).toBe("ok");
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(wait).toHaveBeenCalledTimes(2);
+  });
+  it("stops after two waits when the page remains empty", async () => {
+    const read = vi.fn().mockResolvedValue([]);
+    const wait = vi.fn().mockResolvedValue(undefined);
+    expect((await readPageWithRecovery(read, wait)).status).toBe("empty");
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(wait).toHaveBeenCalledTimes(2);
+  });
   it("does not retry denied permission", async () => {
     const read = vi
       .fn()
