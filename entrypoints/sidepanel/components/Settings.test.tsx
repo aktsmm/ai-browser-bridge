@@ -278,9 +278,9 @@ describe("Settings provider UI", () => {
       /<input[^>]*name="claude-connection"[^>]*>/g,
     );
     expect(connectionInputs).toHaveLength(2);
-    expect(connectionInputs?.every((input) => !input.includes("disabled"))).toBe(
-      true,
-    );
+    expect(
+      connectionInputs?.every((input) => !input.includes("disabled")),
+    ).toBe(true);
     expect(html).toContain("Connection status is unavailable");
     expect(html).toContain(">unknown</span>");
   });
