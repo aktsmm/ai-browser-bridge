@@ -6,6 +6,7 @@ import {
   Chat,
   getQuickActions,
   isAssistantAlertMessage,
+  getExecutionFeedback,
   markdownSanitizeSchema,
   separateToolLogs,
   shouldSubmitChat,
@@ -14,11 +15,43 @@ import {
   stepPromptHistory,
 } from "./Chat";
 import { getDownloadShowId } from "../download-id";
-import { isAssistantAnswer } from "../types";
+import { isAssistantAnswer, isDisplayActionRequest } from "../types";
 import { PageContextStatus } from "./PageContextStatus";
 import { buildIssueUrl } from "./IssueReportDialog";
 
 describe("PageContextStatus", () => {
+  it("keeps display action requests out of answer saves and quick actions", () => {
+    const request = {
+      role: "assistant" as const,
+      content:
+        '[Agent Mode: fixture]\n[ACTION: findDisplayText, {"text":"Heading"}]',
+    };
+    expect(isDisplayActionRequest(request)).toBe(true);
+    expect(isAssistantAnswer(request)).toBe(false);
+    expect(
+      isAssistantAnswer({
+        role: "assistant",
+        content: "The display change was verified.",
+      }),
+    ).toBe(true);
+    expect(
+      isDisplayActionRequest({ role: "user", content: request.content }),
+    ).toBe(false);
+    expect(
+      isDisplayActionRequest({
+        role: "assistant",
+        content:
+          '[ACTION: replaceText, {"selector":"ref:e1","text":"A"}]\nUnverified [result]',
+      }),
+    ).toBe(false);
+    expect(
+      isDisplayActionRequest({
+        role: "assistant",
+        content:
+          'Explanation with [ACTION: replaceText, {"selector":"ref:e1","text":"A"}]',
+      }),
+    ).toBe(false);
+  });
   it("keeps status, truncated origin and retry in one compact row", () => {
     const html = renderToStaticMarkup(
       React.createElement(PageContextStatus, {
@@ -180,6 +213,152 @@ describe("getQuickActions", () => {
     expect(isAssistantAnswer({ role: "assistant", content: "Answer" })).toBe(
       true,
     );
+  });
+  it("distinguishes verified results from lookup, failure and uncertain outcomes", () => {
+    const notice = (result: string) => ({
+      role: "assistant" as const,
+      kind: "notice" as const,
+      content: `🤖 [Loop 1/20] Execution result\r\n• ${result}`,
+    });
+    expect(
+      getExecutionFeedback(
+        notice("Display text found: ref:f0:d123. Nothing changed yet."),
+        "en",
+      )?.kind,
+    ).toBe("found");
+    expect(
+      getExecutionFeedback(notice("Display text changed; not submitted"), "ja")
+        ?.kind,
+    ).toBe("verified");
+    expect(
+      getExecutionFeedback(
+        notice("Error: eligible display text not found; nothing changed"),
+        "en",
+      )?.kind,
+    ).toBe("failed");
+    expect(
+      getExecutionFeedback(
+        notice("Error: display text search was incomplete; nothing changed"),
+        "ja",
+      )?.text,
+    ).toContain("検索の確認範囲を超えた");
+    expect(
+      getExecutionFeedback(
+        notice("Error: display text search was incomplete; nothing changed"),
+        "en",
+      )?.text,
+    ).toContain("nothing changed");
+    expect(
+      getExecutionFeedback(
+        notice("Error: more than one matching display text exists"),
+        "ja",
+      )?.text,
+    ).toContain("同じ文言が複数");
+    expect(
+      getExecutionFeedback(
+        notice("Error: display target changed or is restricted"),
+        "ja",
+      )?.text,
+    ).toContain("現在の表示を確認");
+    expect(
+      getExecutionFeedback(
+        notice("Error: display editing permission expired or was revoked"),
+        "en",
+      )?.text,
+    ).toContain("permission is inactive");
+    expect(isAssistantAlertMessage(notice("Error: target changed"))).toBe(true);
+    expect(
+      getExecutionFeedback(
+        notice(
+          "Error: display operation outcome is unverified; inspect the page",
+        ),
+        "ja",
+      )?.kind,
+    ).toBe("unverified");
+    expect(
+      getExecutionFeedback(
+        notice(
+          "Navigation requested; the next snapshot must confirm the destination",
+        ),
+        "en",
+      )?.kind,
+    ).toBe("unverified");
+    expect(
+      getExecutionFeedback(notice("Scrolled; refresh page context"), "en")
+        ?.kind,
+    ).toBe("review");
+    expect(
+      getExecutionFeedback(
+        { ...notice("Display text changed; not submitted"), kind: undefined },
+        "en",
+      ),
+    ).toBeUndefined();
+    expect(
+      getExecutionFeedback(
+        { ...notice("Display text changed; not submitted"), role: "user" },
+        "en",
+      ),
+    ).toBeUndefined();
+  });
+  it("shows failed execution feedback outside the collapsed details without answer actions", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(Chat, {
+        messages: [
+          {
+            role: "assistant",
+            kind: "notice",
+            content:
+              "🤖 [Loop 1/20] Execution result\n• Error: target not found",
+          },
+        ],
+        isLoading: false,
+        onSendMessage: vi.fn(),
+        onClearMessages: vi.fn(),
+        onStopGeneration: vi.fn(),
+        language: "en",
+        onSaveMarkdown: vi.fn(),
+        onSaveBlogDraft: vi.fn(),
+      }),
+    );
+    expect(html).toContain('role="alert"');
+    expect(html.indexOf("The action could not be completed.")).toBeLessThan(
+      html.indexOf("<details"),
+    );
+    expect(html).not.toContain("Save this answer");
+  });
+  it("moves only explicitly unexecuted report commands into labeled details", () => {
+    const content =
+      'Verified result. [ACTION: replaceText, {"selector":"ref:f0:d123","text":"A ] B"}] [ACTION: click, input[type="button"]]';
+    expect(separateToolLogs(content).answer).toBe(content);
+    const report = separateToolLogs(content, true, "en");
+    expect(report.answer).toBe("Verified result.");
+    expect(report.logs).toHaveLength(2);
+    expect(report.logs.every((log) => log.startsWith("Not executed:"))).toBe(
+      true,
+    );
+    expect(
+      separateToolLogs("Report. [ACTION: click, ref:e1", true).answer,
+    ).toContain("[ACTION:");
+    const html = renderToStaticMarkup(
+      React.createElement(Chat, {
+        messages: [
+          {
+            role: "assistant",
+            commandsNotExecuted: true,
+            content: '[ACTION: findDisplayText, {"text":"Heading"}]',
+          },
+        ],
+        isLoading: false,
+        onSendMessage: vi.fn(),
+        onClearMessages: vi.fn(),
+        onStopGeneration: vi.fn(),
+        language: "en",
+        onSaveMarkdown: vi.fn(),
+        onSaveBlogDraft: vi.fn(),
+      }),
+    );
+    expect(html).toContain("Not executed:");
+    expect(html).not.toContain("Display edit request");
   });
   it("does not submit while confirming IME composition or adding a newline", () => {
     expect(

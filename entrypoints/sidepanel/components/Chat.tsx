@@ -5,7 +5,7 @@ import remarkGfm from "remark-gfm";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import type { Options as RehypeSanitizeOptions } from "rehype-sanitize";
 import type { ChatMessage } from "../types";
-import { isAssistantAnswer } from "../types";
+import { isAssistantAnswer, isDisplayActionRequest } from "../types";
 import type { Language } from "../i18n";
 import { t } from "../i18n";
 import {
@@ -56,11 +56,115 @@ export const markdownSanitizeSchema: RehypeSanitizeOptions = {
 export function isAssistantAlertMessage(message: ChatMessage): boolean {
   return (
     message.role === "assistant" &&
-    (message.kind === "error" || message.content.trim().startsWith("⚠️"))
+    (message.kind === "error" ||
+      message.content.trim().startsWith("⚠️") ||
+      getExecutionFeedback(message, "en")?.kind === "failed")
   );
 }
 
-export function separateToolLogs(content: string): {
+export function getExecutionFeedback(
+  message: ChatMessage,
+  language: Language,
+):
+  | {
+      kind: "failed" | "unverified" | "found" | "verified" | "review";
+      text: string;
+    }
+  | undefined {
+  if (
+    message.role !== "assistant" ||
+    message.kind !== "notice" ||
+    !/^🤖 \[Loop \d+\/\d+\]/.test(message.content)
+  )
+    return undefined;
+  const lines = message.content
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*•\s*/, "").trim());
+  if (
+    lines.some((line) => /\b(?:unverified|could not be verified)\b/i.test(line))
+  )
+    return {
+      kind: "unverified",
+      text:
+        language === "ja"
+          ? "結果は未確認です。ページを確認してから次の操作を行ってください。"
+          : "Outcome unverified. Inspect the page before another action.",
+    };
+  if (
+    lines.some((line) =>
+      /^(?:Error:|Invalid display action format)/i.test(line),
+    )
+  ) {
+    const failures = lines.filter((line) => /^Error:/i.test(line)).join("\n");
+    const reason = /more than one/i.test(failures)
+      ? language === "ja"
+        ? "同じ文言が複数あります。対象を一意に特定してください。"
+        : "Multiple matching targets. Identify a unique target."
+      : /display text search was incomplete/i.test(failures)
+        ? language === "ja"
+          ? "検索の確認範囲を超えたため変更していません。この箇所は手動で確認してください。"
+          : "Search limits were reached; nothing changed. Inspect this target manually."
+        : /eligible display text not found/i.test(failures)
+          ? language === "ja"
+            ? "対象が見つかりません。ページと指定した文言を確認してください。"
+            : "Target not found. Check the page and exact text."
+          : /display target changed or is restricted/i.test(failures)
+            ? language === "ja"
+              ? "対象が変わったか、編集できない箇所です。現在の表示を確認してください。"
+              : "Target changed or is protected. Inspect the current display."
+            : /permission (?:expired|was revoked)/i.test(failures)
+              ? language === "ja"
+                ? "表示編集の許可が無効です。許可設定を確認してください。"
+                : "Display editing permission is inactive. Check its setting."
+              : language === "ja"
+                ? "操作を完了できませんでした。詳細を確認してください。"
+                : "The action could not be completed. Check the details.";
+    return { kind: "failed", text: reason };
+  }
+  if (lines.some((line) => /^Display text found:/.test(line)))
+    return {
+      kind: "found",
+      text:
+        language === "ja"
+          ? "対象が見つかりました。まだ表示は変更していません。"
+          : "Target found. The display has not changed yet.",
+    };
+  if (
+    lines.some((line) =>
+      /^(?:Display text changed; not submitted|Field value verified; not submitted|Selection verified|Page condition verified|Verified \d+ fields; not submitted)$/.test(
+        line,
+      ),
+    )
+  )
+    return {
+      kind: "verified",
+      text:
+        language === "ja"
+          ? "操作結果を確認しました。送信操作は要求していません。"
+          : "Action result verified. No submit action was requested.",
+    };
+  if (lines.some((line) => /\brequested\b/i.test(line)))
+    return {
+      kind: "unverified",
+      text:
+        language === "ja"
+          ? "操作を要求しました。完了はまだ確認できていません。"
+          : "Action requested. Completion is not yet verified.",
+    };
+  return {
+    kind: "review",
+    text:
+      language === "ja"
+        ? "操作結果の詳細を確認してください。"
+        : "Check the action result details.",
+  };
+}
+
+export function separateToolLogs(
+  content: string,
+  commandsNotExecuted = false,
+  language: Language = "ja",
+): {
   answer: string;
   logs: string[];
 } {
@@ -69,13 +173,43 @@ export function separateToolLogs(content: string): {
     /__DOWNLOAD_FILE__:[^:]+:[A-Za-z0-9+/=]+:__END_DOWNLOAD__/g,
     "",
   );
-  const answer = cleaned.replace(
+  let answer = cleaned.replace(
     /\n*🔧 (?:ツール実行|Tool Execution): ([^\n]+)\n📋 (?:結果|Result): ([^\n]*(?:\n(?!🔧|\[Agent|##|\n\n)[^\n]*)*)\n*/g,
     (_, toolName, result) => {
       logs.push(`${toolName.trim()}: ${result.trim()}`);
       return "\n";
     },
   );
+  if (commandsNotExecuted) {
+    let offset = 0;
+    while (offset < answer.length) {
+      const start = answer.indexOf("[ACTION:", offset);
+      if (start < 0) break;
+      let depth = 1;
+      let quote = "";
+      let escaped = false;
+      let end = start + 8;
+      for (; end < answer.length && depth > 0; end++) {
+        const character = answer[end];
+        if (escaped) {
+          escaped = false;
+          continue;
+        }
+        if (quote) {
+          if (character === "\\") escaped = true;
+          else if (character === quote) quote = "";
+        } else if (['"', "'", "`"].includes(character)) quote = character;
+        else if (character === "[") depth++;
+        else if (character === "]") depth--;
+      }
+      if (depth !== 0) break;
+      logs.push(
+        `${language === "ja" ? "未実行" : "Not executed"}: ${answer.slice(start, end)}`,
+      );
+      answer = answer.slice(0, start) + answer.slice(end);
+      offset = start;
+    }
+  }
   return { answer: answer.trim(), logs };
 }
 
@@ -706,10 +840,17 @@ export function Chat({
 
         {messages.map((message, index) => {
           const isAlertMessage = isAssistantAlertMessage(message);
-          const { answer, logs } = separateToolLogs(message.content);
+          const executionFeedback = getExecutionFeedback(message, language);
+          const { answer, logs } = separateToolLogs(
+            message.content,
+            message.commandsNotExecuted,
+            language,
+          );
           const isExecutionResult =
             message.kind === "notice" &&
             /^🤖 \[Loop \d+\/\d+\]/.test(message.content);
+          const isDisplayRequest =
+            !message.commandsNotExecuted && isDisplayActionRequest(message);
           return (
             <div
               key={index}
@@ -731,7 +872,7 @@ export function Chat({
                 className={`max-w-[85%] p-3 rounded-lg relative group ${
                   message.role === "user"
                     ? "bg-blue-600 text-white"
-                    : message.kind === "error"
+                    : isAlertMessage
                       ? "bg-red-50 border border-red-200"
                       : message.kind === "notice"
                         ? "bg-amber-50 border border-amber-200"
@@ -758,15 +899,30 @@ export function Chat({
                         : "Partial response"}
                     </div>
                   )}
-                  {isExecutionResult ? (
-                    <details>
-                      <summary className="cursor-pointer">
-                        {language === "ja" ? "操作の詳細" : "Action details"}
-                      </summary>
-                      <pre className="mt-2 whitespace-pre-wrap break-words">
-                        {message.content}
-                      </pre>
-                    </details>
+                  {isExecutionResult || isDisplayRequest ? (
+                    <>
+                      {executionFeedback && (
+                        <p
+                          className={`mb-2 text-sm ${executionFeedback.kind === "failed" ? "text-red-800" : ""}`}
+                        >
+                          {executionFeedback.text}
+                        </p>
+                      )}
+                      <details>
+                        <summary className="cursor-pointer">
+                          {isDisplayRequest
+                            ? language === "ja"
+                              ? "表示編集の操作要求"
+                              : "Display edit request"
+                            : language === "ja"
+                              ? "操作の詳細"
+                              : "Action details"}
+                        </summary>
+                        <pre className="mt-2 whitespace-pre-wrap break-words">
+                          {message.content}
+                        </pre>
+                      </details>
+                    </>
                   ) : message.role === "assistant" ? (
                     <>
                       <ReactMarkdown

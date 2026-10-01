@@ -20,6 +20,7 @@
     "postinstall": "wxt prepare"
   },
   "devDependencies": {
+    "@types/chrome": "^0.3.0",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
     "@wxt-dev/module-react": "^1.1.5",
@@ -30,11 +31,11 @@
     "postcss": "^8.4.49",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
-    "sharp": "^0.34.5",
+    "sharp": "^0.35.4",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.0",
-    "vitest": "^3.2.4",
-    "wxt": "^0.19.0"
+    "vitest": "^5.0.1",
+    "wxt": "^0.21.4"
   },
   "dependencies": {
     "react-markdown": "^10.1.0",

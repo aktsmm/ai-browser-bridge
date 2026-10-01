@@ -2,7 +2,7 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
-    "types": ["wxt/client", "chrome"],
+    "types": ["wxt/vite-builder-env", "chrome"],
     "jsx": "react-jsx"
   },
   "include": ["**/*.ts", "**/*.tsx", ".wxt/wxt.d.ts"],

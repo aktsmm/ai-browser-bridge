@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 
 const scriptFilePath = fileURLToPath(import.meta.url);
 const scriptDirectory = path.dirname(scriptFilePath);
@@ -12,8 +13,53 @@ async function readTextFile(filePath) {
   return fs.readFile(filePath, "utf8");
 }
 
+export function readExportedNumericConstant(source, name) {
+  const parsed = ts.createSourceFile(
+    "limits.ts",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  for (const statement of parsed.statements) {
+    if (
+      !ts.isVariableStatement(statement) ||
+      !(statement.declarationList.flags & ts.NodeFlags.Const) ||
+      !statement.modifiers?.some(
+        (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
+      )
+    )
+      continue;
+    for (const declaration of statement.declarationList.declarations) {
+      if (
+        ts.isIdentifier(declaration.name) &&
+        declaration.name.text === name &&
+        declaration.initializer &&
+        ts.isNumericLiteral(declaration.initializer)
+      )
+        return Number(declaration.initializer.text.replace(/_/g, ""));
+    }
+  }
+  return undefined;
+}
+
 async function main() {
   const failures = [];
+  const probeName = "MAX_CHAT_MESSAGES";
+  const parserChecks = [
+    { source: "export const MAX_CHAT_MESSAGES = 2_00;", expected: 200 },
+    { source: "// export const MAX_CHAT_MESSAGES = 200;", expected: undefined },
+    { source: "const MAX_CHAT_MESSAGES = 200;", expected: undefined },
+    { source: "export let MAX_CHAT_MESSAGES = 200;", expected: undefined },
+    { source: "export const MAX_CHAT_MESSAGES = '200';", expected: undefined },
+  ];
+  if (
+    parserChecks.some(
+      (check) =>
+        readExportedNumericConstant(check.source, probeName) !== check.expected,
+    )
+  )
+    failures.push("Exported numeric contract parser self-check failed");
 
   const chromePackagePath = path.join(chromeDirectory, "package.json");
   const wxtConfigPath = path.join(chromeDirectory, "wxt.config.ts");
@@ -79,6 +125,29 @@ async function main() {
   }
 
   const expectedVersionFallback = `version: process.env.npm_package_version || "${chromePackage.version}"`;
+  const standaloneServerSource = await readTextFile(
+    path.join(chromeDirectory, "standalone-bridge", "src", "index.ts"),
+  );
+  for (const name of [
+    "MAX_CHAT_MESSAGES",
+    "MAX_CHAT_MESSAGE_LENGTH",
+    "MAX_CHAT_HISTORY_LENGTH",
+  ]) {
+    const vscodeLimit = readExportedNumericConstant(
+      vscodeRequestGuardsSource,
+      name,
+    );
+    const standaloneLimit = readExportedNumericConstant(
+      standaloneServerSource,
+      name,
+    );
+    if (
+      vscodeLimit === undefined ||
+      standaloneLimit === undefined ||
+      vscodeLimit !== standaloneLimit
+    )
+      failures.push(`VS Code and standalone must declare matching ${name}`);
+  }
   if (!wxtConfigSource.includes(expectedVersionFallback)) {
     failures.push(
       `wxt.config.ts fallback version must match chrome package.json version ${chromePackage.version}`,

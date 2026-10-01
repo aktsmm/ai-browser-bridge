@@ -61,6 +61,9 @@ const DEFAULT_ALLOWED_EXTENSION_ORIGINS = [
 ];
 const MAX_PAGE_CONTENT_LENGTH = 50_000;
 const MAX_ATTACHMENT_COUNT = 5;
+export const MAX_CHAT_MESSAGES = 200;
+export const MAX_CHAT_MESSAGE_LENGTH = 100_000;
+export const MAX_CHAT_HISTORY_LENGTH = 500_000;
 const DEFAULT_PLAYWRIGHT_MCP_ENDPOINT = "http://127.0.0.1:3001/call";
 const COPILOT_TIMEOUT_MS = 60_000;
 const CLIENT_HEADER = "chrome-extension";
@@ -357,7 +360,11 @@ function validateChatRequest(
     return { ok: false, error: "Invalid provider" };
   if (provider !== "lm-studio") {
     const copilot = settings.copilot as Record<string, unknown> | undefined;
-    if (!copilot || typeof copilot.model !== "string" || !copilot.model.trim())
+    if (
+      !copilot ||
+      typeof copilot.model !== "string" ||
+      (!copilot.model.trim() && provider !== "copilot-sdk")
+    )
       return { ok: false, error: "Invalid copilot settings" };
   }
   if (provider === "lm-studio") {
@@ -385,7 +392,13 @@ function validateChatRequest(
     };
   if (!Array.isArray(request.messages))
     return { ok: false, error: "Invalid messages" };
+  if (request.messages.length > MAX_CHAT_MESSAGES)
+    return {
+      ok: false,
+      error: `messages exceed ${MAX_CHAT_MESSAGES} items; clear chat history before retrying`,
+    };
   const roles = new Set(["user", "assistant", "system"]);
+  let historyLength = 0;
   for (const message of request.messages) {
     if (!message || typeof message !== "object")
       return { ok: false, error: "Invalid message item" };
@@ -394,6 +407,17 @@ function validateChatRequest(
       return { ok: false, error: "Invalid message role" };
     if (typeof item.content !== "string")
       return { ok: false, error: "Invalid message content" };
+    if (item.content.length > MAX_CHAT_MESSAGE_LENGTH)
+      return {
+        ok: false,
+        error: `message content exceeds ${MAX_CHAT_MESSAGE_LENGTH} characters; shorten the message before retrying`,
+      };
+    historyLength += item.content.length;
+    if (historyLength > MAX_CHAT_HISTORY_LENGTH)
+      return {
+        ok: false,
+        error: `chat history exceeds ${MAX_CHAT_HISTORY_LENGTH} characters; clear chat history before retrying`,
+      };
   }
   if (request.attachments !== undefined) {
     if (!Array.isArray(request.attachments))
@@ -541,11 +565,28 @@ async function isSdkAvailable(): Promise<boolean> {
     return false;
   }
 }
+export function buildRestrictedCopilotCliArgs(prompt: string): string[] {
+  return [
+    "-p",
+    prompt,
+    "--silent",
+    "--available-tools=__browser_bridge_no_native_tools__",
+    "--deny-tool=shell",
+    "--deny-tool=write",
+    "--deny-tool=read",
+    "--no-custom-instructions",
+    "--no-ask-user",
+  ];
+}
+
 async function runCliPrompt(
   prompt: string,
   signal?: AbortSignal,
 ): Promise<string> {
-  const result = await runCommand(["-p", prompt, "--silent"], signal);
+  const result = await runCommand(
+    buildRestrictedCopilotCliArgs(prompt),
+    signal,
+  );
   if (result.exitCode !== 0)
     throw new Error(
       result.stderr.trim() ||
@@ -740,6 +781,7 @@ export class StandaloneBridgeServer {
         bridge: "standalone",
         providers: await this.capabilities(),
         contextVersion: 1,
+        displayTextLookupVersion: 1,
         browserBackend: "extension-dom",
         recommended: { chat: "copilot-sdk", agent: "copilot-sdk" },
       });
@@ -1109,6 +1151,9 @@ export class StandaloneBridgeServer {
     const abort = new AbortController();
     req.on("aborted", () => abort.abort());
     req.on("close", () => abort.abort());
+    res.on("close", () => {
+      if (!res.writableEnded) abort.abort();
+    });
     try {
       for await (const chunk of this.chat(validation.value, abort.signal)) {
         if (abort.signal.aborted || res.destroyed) break;

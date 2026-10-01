@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { downloadTextFile, parseActionsFromResponse } from "./browser-actions";
+import {
+  downloadTextFile,
+  parseActionsFromResponse,
+  parseFirstBrowserAction,
+} from "./browser-actions";
 import {
   actionUsesPersonalProfile,
   browserActionAllowed,
@@ -110,6 +114,22 @@ describe("bound browser execution policy", () => {
     ).toBe(true);
   });
   it("parses only bounded, reference-targeted display edits", () => {
+    expect(
+      parseFirstBrowserAction(
+        '[ACTION: replaceText, {"edits":[{"selector":"text=Do you need a break?","text":"Enjoy Work"}]}][ACTION: click, ref:e2]',
+      ),
+    ).toEqual({ error: "invalid-action" });
+    expect(
+      parseFirstBrowserAction('[ACTION: replaceText, {"selector":"ref:e1"'),
+    ).toEqual({ error: "invalid-action" });
+    expect(parseFirstBrowserAction("No operation requested")).toEqual({});
+    expect(
+      parseFirstBrowserAction(
+        '[ACTION: replaceText, {"selector":"ref:e1","text":"Enjoy Work"}]',
+      ),
+    ).toEqual({
+      action: { type: "replaceText", selector: "ref:e1", text: "Enjoy Work" },
+    });
     expect(
       parseActionsFromResponse(
         '[ACTION: replaceText, {"selector":"ref:f3:e8","text":"Demo balance"}]',

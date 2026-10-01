@@ -111,6 +111,8 @@ export function parseBridgeCapabilities(
   return {
     version: value.version,
     contextVersion: value.contextVersion === 1 ? 1 : undefined,
+    displayTextLookupVersion:
+      value.displayTextLookupVersion === 1 ? 1 : undefined,
     browserBackend:
       value.browserBackend === "extension-dom" ? "extension-dom" : undefined,
     bridge: value.bridge as BridgeCapabilities["bridge"] | undefined,

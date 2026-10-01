@@ -1440,6 +1440,18 @@ function findCommaOutsideQuotes(source: string, startIndex: number): number {
   return -1;
 }
 
+export function parseFirstBrowserAction(response: string): {
+  action?: BrowserAction;
+  error?: "invalid-action";
+} {
+  const start = response.indexOf("[ACTION:");
+  if (start === -1) return {};
+  const end = findBracketCommandEnd(response, start + 8);
+  if (end === -1) return { error: "invalid-action" };
+  const parsed = parseActionsFromResponse(response.slice(start, end));
+  return parsed[0] ? { action: parsed[0] } : { error: "invalid-action" };
+}
+
 export function parseActionsFromResponse(response: string): BrowserAction[] {
   const actions: BrowserAction[] = [];
 
@@ -1483,6 +1495,20 @@ function parseAction(type: string, params?: string): BrowserAction | null {
   const trimmedParams = params?.trim();
 
   switch (type) {
+    case "finddisplaytext": {
+      if (!trimmedParams?.startsWith("{")) return null;
+      try {
+        const parsed = JSON.parse(trimmedParams) as Record<string, unknown>;
+        return typeof parsed.text === "string" &&
+          parsed.text.trim().length > 0 &&
+          parsed.text.length <= 160 &&
+          !/[\r\n]/.test(parsed.text)
+          ? { type: "findDisplayText", text: parsed.text }
+          : null;
+      } catch {
+        return null;
+      }
+    }
     case "replacetext": {
       if (!trimmedParams?.startsWith("{")) return null;
       try {
@@ -1495,7 +1521,9 @@ function parseAction(type: string, params?: string): BrowserAction | null {
           const candidate = edit as Record<string, unknown>;
           return (
             typeof candidate.selector === "string" &&
-            /^(?:ref:)?(?:f\d+:)?e\d+$/i.test(candidate.selector) &&
+            /^(?:(?:ref:)?(?:f\d+:)?e\d+|ref:f\d+:d[a-f0-9]{32})$/.test(
+              candidate.selector,
+            ) &&
             typeof candidate.text === "string" &&
             candidate.text.length > 0 &&
             candidate.text.length <= 500 &&

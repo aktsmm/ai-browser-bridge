@@ -10,6 +10,7 @@ export const BROWSER_ACTIONS = [
   "slider",
   "fillForm",
   "replaceText",
+  "findDisplayText",
   "hover",
   "focus",
   "getHtml",
@@ -22,6 +23,7 @@ export type TaskMode = "read-only" | "input" | "automation";
 export interface ChatContext {
   fileOperationsEnabled?: boolean;
   displayEditingEnabled?: boolean;
+  displayTextLookupVersion?: 1;
   version: 1;
   mode: TaskMode;
   allowedActions: string[];
@@ -72,6 +74,11 @@ const PROFILE_FIELDS = [
 export function isChatContext(value: unknown): value is ChatContext {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const context = value as Record<string, unknown>;
+  if (
+    context.displayTextLookupVersion !== undefined &&
+    context.displayTextLookupVersion !== 1
+  )
+    return false;
   if (
     context.fileOperationsEnabled !== undefined &&
     typeof context.fileOperationsEnabled !== "boolean"
@@ -175,8 +182,10 @@ export function effectiveBrowserActions(context?: ChatContext): string[] {
   return [...new Set(context.allowedActions)].filter(
     (action) =>
       (BROWSER_ACTIONS as readonly string[]).includes(action) &&
-      (action === "replaceText"
-        ? context.displayEditingEnabled === true
+      (action === "replaceText" || action === "findDisplayText"
+        ? context.displayEditingEnabled === true &&
+          (action !== "findDisplayText" ||
+            context.displayTextLookupVersion === 1)
         : context.mode === "automation" || INPUT_ACTIONS.has(action)),
   );
 }
@@ -186,9 +195,13 @@ export function buildContextInstructions(
   bridge: string,
 ): string {
   const actions = effectiveBrowserActions(context);
-  const displayEditInstructions = actions.includes("replaceText")
-    ? ' To change multiple visible labels at once, use one action such as [ACTION: replaceText, {"edits":[{"selector":"ref:f0:e5","text":"Demo balance"},{"selector":"ref:f0:e6","text":"Demo tenant"}]}]. Edit up to 10 short visible text elements in the same frame; do not target forms or links. The batch is temporary and can be undone together. A single {"selector":"ref:e5","text":"Demo"} edit is also supported.'
-    : "";
+  const displayEditInstructions =
+    context?.displayTextLookupVersion === 1 &&
+    (actions.includes("replaceText") || actions.includes("findDisplayText"))
+      ? ' For temporary display editing, first locate the exact visible text with [ACTION: findDisplayText, {"text":"Do you need a break?"}]. Wait for the returned ref:f0:d<token>, then emit [ACTION: replaceText, {"selector":"<exact returned ref>","text":"Enjoy Work"}]. For multiple requested labels, collect up to 10 lookup refs before one replaceText action with {"edits":[{"selector":"<returned ref>","text":"replacement"}]}; all edits must be in one frame. After that one replacement action, only report the result. Do not invent refs or use text=/CSS selectors. Eligible static headings inside forms may be changed; controls, values, buttons and links remain protected. A duplicate, incomplete or missing match requires clarification; do not create or download a script instead. The browser verifies the original element and text immediately before changing it. Use one action per response and report success only from execution results.'
+      : actions.includes("replaceText")
+        ? ' To change multiple visible labels at once, use one action such as [ACTION: replaceText, {"edits":[{"selector":"ref:f0:e5","text":"Demo balance"},{"selector":"ref:f0:e6","text":"Demo tenant"}]}]. Edit up to 10 short visible text elements in the same frame; do not target forms or links. The batch is temporary and can be undone together. A single {"selector":"ref:e5","text":"Demo"} edit is also supported.'
+        : "";
   const responseLanguage = context?.responseLanguage
     ? `## Default response language\nReply in ${context.responseLanguage === "ja" ? "Japanese" : "English"} unless the user's request or global, profile, or task instructions explicitly specify another language.\n\n`
     : "";

@@ -10,7 +10,7 @@
     "noEmit": true,
     "jsx": "react-jsx",
     "lib": ["ESNext", "DOM"],
-    "types": ["wxt/client", "chrome"]
+    "types": ["wxt/vite-builder-env", "chrome"]
   },
   "include": ["**/*.ts", "**/*.tsx", ".wxt/wxt.d.ts"],
   "exclude": [

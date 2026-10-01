@@ -20,7 +20,7 @@ import type {
 } from "./types";
 import {
   executeBrowserAction,
-  parseActionsFromResponse,
+  parseFirstBrowserAction,
   parseFileActionsFromResponse,
   captureScreenshot,
   setEvaluateActionEnabled,
@@ -91,10 +91,17 @@ import {
   actionUsesPersonalProfile,
   forgetDisplayEdits,
   hasUndoableDisplayEdit,
+  recoverDisplayEdits,
   inspectButtonClick,
   undoLastDisplayEdit,
 } from "./browser-execution";
 import { readPageWithRecovery, type PageContextResult } from "./page-context";
+import {
+  canEditDisplay,
+  DISPLAY_EDIT_ORIGINS_KEY,
+  displayEditOrigin,
+  normalizeDisplayEditOrigins,
+} from "./display-edit-permission";
 
 const DEFAULT_SETTINGS: LLMSettings = {
   provider: "auto",
@@ -291,6 +298,77 @@ export default function App() {
   };
   const [displayEditingEnabled, setDisplayEditingEnabled] = useState(false);
   const activeDisplayEditRef = useRef(false);
+  const activeDisplayOriginRef = useRef("");
+  const [displayEditOrigins, setDisplayEditOrigins] = useState<string[]>([]);
+  const [displaySiteOrigin, setDisplaySiteOrigin] = useState("");
+  const displaySiteOriginRef = useRef("");
+  const displayOnceOriginRef = useRef("");
+  const [displayPermissionReady, setDisplayPermissionReady] = useState(false);
+  const [displayPermissionSaving, setDisplayPermissionSaving] = useState(false);
+  const [displayPermissionError, setDisplayPermissionError] = useState(false);
+  useEffect(() => {
+    let disposed = false;
+    const onChanged = (
+      changes: Record<string, chrome.storage.StorageChange>,
+      area: string,
+    ) => {
+      if (area !== "local" || !changes[DISPLAY_EDIT_ORIGINS_KEY]) return;
+      const next = normalizeDisplayEditOrigins(
+        changes[DISPLAY_EDIT_ORIGINS_KEY].newValue,
+      );
+      const previous = normalizeDisplayEditOrigins(
+        changes[DISPLAY_EDIT_ORIGINS_KEY].oldValue,
+      );
+      if (
+        previous.includes(activeDisplayOriginRef.current) &&
+        !next.includes(activeDisplayOriginRef.current)
+      ) {
+        activeDisplayEditRef.current = false;
+        abortControllerRef.current?.abort();
+      }
+      if (!disposed) setDisplayEditOrigins(next);
+    };
+    chrome.storage.onChanged.addListener(onChanged);
+    void chrome.storage.local.get(DISPLAY_EDIT_ORIGINS_KEY).then(
+      (stored) => {
+        if (disposed) return;
+        setDisplayEditOrigins(
+          normalizeDisplayEditOrigins(stored[DISPLAY_EDIT_ORIGINS_KEY]),
+        );
+        setDisplayPermissionReady(true);
+      },
+      () => {
+        if (!disposed) setDisplayPermissionError(true);
+      },
+    );
+    return () => {
+      disposed = true;
+      chrome.storage.onChanged.removeListener(onChanged);
+    };
+  }, []);
+  const saveDisplayPermission = async (origin: string, enabled: boolean) => {
+    if (!origin || displayPermissionSaving) return false;
+    setDisplayPermissionSaving(true);
+    setDisplayPermissionError(false);
+    try {
+      const saved = await chrome.runtime.sendMessage({
+        type: "display-edit",
+        operation: "permission",
+        origin,
+        enabled,
+      });
+      if (!saved?.ok) throw new Error("Permission could not be saved");
+      const next = normalizeDisplayEditOrigins(saved.origins);
+      setDisplayEditOrigins(next);
+      setDisplayPermissionReady(true);
+      return true;
+    } catch {
+      setDisplayPermissionError(true);
+      return false;
+    } finally {
+      setDisplayPermissionSaving(false);
+    }
+  };
   const [undoDisplayTabIds, setUndoDisplayTabIds] = useState<Set<number>>(
     () => new Set(),
   );
@@ -300,7 +378,33 @@ export default function App() {
     const updateActiveTab = () => {
       void chrome.tabs.query({ active: true, currentWindow: true }).then(
         ([tab]) => {
-          if (!disposed) setActiveTabId(tab?.id ?? null);
+          if (!disposed) {
+            setActiveTabId(tab?.id ?? null);
+            const origin = displayEditOrigin(tab?.url);
+            setDisplaySiteOrigin(origin);
+            if (origin !== displaySiteOriginRef.current)
+              setDisplayEditingEnabled(false);
+            displaySiteOriginRef.current = origin;
+            if (tab?.id !== undefined) {
+              const tabId = tab.id;
+              void recoverDisplayEdits(tabId)
+                .then(() => {
+                  if (disposed) return;
+                  setUndoDisplayTabIds((previous) => {
+                    const next = new Set(previous);
+                    if (hasUndoableDisplayEdit(tabId)) next.add(tabId);
+                    else next.delete(tabId);
+                    return next;
+                  });
+                })
+                .catch(() => undefined);
+            }
+            if (
+              activeContentTabIdRef.current !== null &&
+              tab?.id !== activeContentTabIdRef.current
+            )
+              abortControllerRef.current?.abort();
+          }
         },
         () => {
           if (!disposed) setActiveTabId(null);
@@ -317,11 +421,21 @@ export default function App() {
       });
     };
     updateActiveTab();
+    const onUpdated = (
+      _tabId: number,
+      change: Parameters<
+        Parameters<typeof chrome.tabs.onUpdated.addListener>[0]
+      >[1],
+    ) => {
+      if (change.url) updateActiveTab();
+    };
     chrome.tabs.onActivated.addListener(updateActiveTab);
+    chrome.tabs.onUpdated.addListener(onUpdated);
     chrome.tabs.onRemoved.addListener(onRemoved);
     return () => {
       disposed = true;
       chrome.tabs.onActivated.removeListener(updateActiveTab);
+      chrome.tabs.onUpdated.removeListener(onUpdated);
       chrome.tabs.onRemoved.removeListener(onRemoved);
     };
   }, []);
@@ -494,10 +608,11 @@ export default function App() {
       }
       const prompt = toPendingPrompt(newValue, languageRef.current);
       if (prompt) {
+        const pendingType = (newValue as PendingAction).type;
         pendingTaskRef.current =
-          newValue.type === "post"
+          pendingType === "post"
             ? { kind: "post", instructions: prompt }
-            : newValue.type === "customPrompt"
+            : pendingType === "customPrompt"
               ? { kind: "custom", instructions: prompt }
               : { kind: "summary" };
         pendingPromptTabIdRef.current = getPendingActionTabId(newValue);
@@ -1518,12 +1633,10 @@ export default function App() {
       return;
 
     inFlightRequestRef.current = true;
-    const editingForRun =
-      displayEditingEnabled &&
-      !task &&
-      browserActionsEnabled &&
-      assistantSettings.mode !== "read-only";
-    activeDisplayEditRef.current = editingForRun;
+    let editingForRun = false;
+    let displayTaskId = "";
+    const displayLookupSupported =
+      bridgeCapabilities?.displayTextLookupVersion === 1;
     const history = task || isolatedTaskRef.current ? [] : messages;
     isolatedTaskRef.current = Boolean(task);
 
@@ -1584,12 +1697,48 @@ export default function App() {
           ? await chrome.tabs.get(activeContentTabIdRef.current)
           : (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
       activeContentTabIdRef.current = targetTab?.id ?? null;
+      const storedDisplayPermission = displayPermissionReady
+        ? await chrome.storage.local.get(DISPLAY_EDIT_ORIGINS_KEY)
+        : {};
+      editingForRun = canEditDisplay({
+        url: targetTab?.url,
+        mode: assistantSettings.mode,
+        browserActionsEnabled,
+        task: Boolean(task),
+        once:
+          displayPermissionReady &&
+          displayEditingEnabled &&
+          displayOnceOriginRef.current === displayEditOrigin(targetTab?.url),
+        origins: normalizeDisplayEditOrigins(
+          storedDisplayPermission[DISPLAY_EDIT_ORIGINS_KEY],
+        ),
+      });
+      activeDisplayEditRef.current = editingForRun;
+      activeDisplayOriginRef.current = displayEditOrigin(targetTab?.url);
       if (
         targetTab?.id !== undefined &&
         (privateTabsRef.current.has(targetTab.id) ||
           (await isPrivateBrowserTab(targetTab.id)))
       )
         throw new TaskBlockedError(privateTabBlockedMessage(language));
+      if (editingForRun && displayLookupSupported) {
+        const started = await chrome.runtime.sendMessage({
+          type: "display-edit",
+          operation: "start",
+          tabId: targetTab?.id,
+          url: targetTab?.url,
+          once:
+            displayEditingEnabled &&
+            displayOnceOriginRef.current === displayEditOrigin(targetTab?.url),
+        });
+        if (!started?.ok || typeof started.taskId !== "string")
+          throw new TaskBlockedError(
+            language === "ja"
+              ? "表示編集の許可を確認できませんでした。選び直してください。"
+              : "Display editing permission could not be verified. Select it again.",
+          );
+        displayTaskId = started.taskId;
+      }
       const personalForRun =
         !task &&
         assistantSettings.mode !== "read-only" &&
@@ -1623,7 +1772,10 @@ export default function App() {
       } else {
         // Text or Hybrid mode: extract text
         pageContent = await extractPageContent({
-          mode: wantsContentOnly && !editingForRun ? "content" : "interactive",
+          mode:
+            wantsContentOnly && (!editingForRun || displayLookupSupported)
+              ? "content"
+              : "interactive",
           autoScrollForLazyLoad: wantsContentOnly && autoScrollForLazyLoad,
         });
       }
@@ -1697,6 +1849,7 @@ export default function App() {
         browserActionsEnabled,
         language,
         editingForRun,
+        displayLookupSupported,
       );
       if (!pageStateRef.current?.frames.length) context.allowedActions = [];
       context.profileFields = personalForRun ? Object.keys(personalForRun) : [];
@@ -1827,6 +1980,9 @@ export default function App() {
       if (browserActionsEnabled && context.allowedActions.length > 0) {
         const safeMaxAgentLoops = clampAgentLoops(maxAgentLoops);
         let currentResponse = assistantMessage;
+        let displayPhase: "normal" | "replace" | "report" = "normal";
+        let displayCorrectionUsed = false;
+        let displayLookups = 0;
         let loopCount = 0;
         let conversationHistory = [
           ...history,
@@ -1847,10 +2003,30 @@ export default function App() {
           loopCount < safeMaxAgentLoops &&
           !abortControllerRef.current?.signal.aborted
         ) {
-          const parsedActions = parseActionsFromResponse(currentResponse).slice(
-            0,
-            1,
+          const firstAction = parseFirstBrowserAction(currentResponse);
+          if (displayPhase === "report") break;
+          const correctDisplayFormat = Boolean(
+            firstAction.error &&
+            displayTaskId &&
+            !displayCorrectionUsed &&
+            displayPhase === "normal",
           );
+          if (firstAction.error) {
+            setMessages((previous) => [
+              ...previous,
+              {
+                role: "assistant",
+                kind: "notice",
+                content:
+                  language === "ja"
+                    ? "操作の形式が正しくないため実行しませんでした。表示編集には実際の ref が必要です。対象文言の取得からやり直してください。"
+                    : "The action format was invalid; nothing was executed. Display editing requires an actual ref. Read the target text again.",
+              },
+            ]);
+            if (!correctDisplayFormat) break;
+            displayCorrectionUsed = true;
+          }
+          const parsedActions = firstAction.action ? [firstAction.action] : [];
           const blockedHighRiskActions = allowHighRiskActions
             ? []
             : parsedActions.filter(isHighRiskAction);
@@ -1868,7 +2044,7 @@ export default function App() {
           console.log(`[Agent Loop] Current response:`, "Response received");
 
           // Check if response indicates completion (only when NO actions found)
-          if (parsedActions.length === 0) {
+          if (parsedActions.length === 0 && !correctDisplayFormat) {
             // No actions to execute - check if truly done or just needs prompting
             const isCompletion = (() => {
               const lower = currentResponse.toLowerCase();
@@ -1890,7 +2066,7 @@ export default function App() {
 
           // Actions found - continue regardless of any "完了" in text
 
-          if (executableActions.length === 0) {
+          if (executableActions.length === 0 && !correctDisplayFormat) {
             loopCount++;
             const blockedOnlyResults = [
               `• ${t("highRiskActionBlocked", language).replace("{types}", blockedActionTypes.join(", "))}`,
@@ -1910,7 +2086,11 @@ export default function App() {
           }
 
           loopCount++;
-          const actionResults: string[] = [];
+          const actionResults: string[] = correctDisplayFormat
+            ? [
+                'Invalid display action format; nothing was executed. Use [ACTION: findDisplayText, {"text":"exact visible text"}] to obtain a real ref. Do not use text= selectors or create scripts.',
+              ]
+            : [];
           let errorCount = 0;
 
           if (blockedHighRiskActions.length > 0) {
@@ -1921,6 +2101,28 @@ export default function App() {
 
           for (const action of executableActions) {
             try {
+              if (action.type === "findDisplayText" && displayLookups >= 10) {
+                actionResults.push(
+                  "Error: display lookup limit reached; split the request into smaller batches",
+                );
+                stopForReview = true;
+                break;
+              }
+              if (
+                action.type === "findDisplayText" ||
+                action.type === "replaceText"
+              )
+                context.fileOperationsEnabled = false;
+              if (
+                action.type === "findDisplayText" &&
+                loopCount >= safeMaxAgentLoops
+              ) {
+                actionResults.push(
+                  "Error: not enough task steps remain for lookup and replacement; increase the task limit before retrying",
+                );
+                stopForReview = true;
+                break;
+              }
               if (
                 personalForRun &&
                 actionUsesPersonalProfile(action, personalForRun) &&
@@ -1937,6 +2139,28 @@ export default function App() {
                 frames: pageStateRef.current?.frames ?? [],
                 personal: personalForRun,
                 signal: abortControllerRef.current?.signal,
+                displayTaskId,
+                authorizeDisplayEdit: async () => {
+                  const stored = await chrome.storage.local.get(
+                    DISPLAY_EDIT_ORIGINS_KEY,
+                  );
+                  return (
+                    activeDisplayEditRef.current &&
+                    canEditDisplay({
+                      url: context.target?.url,
+                      mode: context.mode,
+                      browserActionsEnabled,
+                      task: Boolean(task),
+                      once:
+                        displayEditingEnabled &&
+                        displayOnceOriginRef.current ===
+                          displayEditOrigin(context.target?.url),
+                      origins: normalizeDisplayEditOrigins(
+                        stored[DISPLAY_EDIT_ORIGINS_KEY],
+                      ),
+                    })
+                  );
+                },
               };
               const button =
                 action.type === "click"
@@ -1957,7 +2181,7 @@ export default function App() {
                   origins &&
                   typeof origins === "object" &&
                   !Array.isArray(origins) &&
-                  origins[button.origin] === true;
+                  (origins as Record<string, unknown>)[button.origin] === true;
                 if (!approved) {
                   const granted = await new Promise<boolean>((resolve) => {
                     clickApprovalResolver.current = resolve;
@@ -1989,7 +2213,7 @@ export default function App() {
               });
               if (
                 action.type === "replaceText" &&
-                result === "Display text changed; not submitted" &&
+                hasUndoableDisplayEdit(targetTab?.id ?? -1) &&
                 targetTab?.id !== undefined
               ) {
                 const editedTabId = targetTab.id;
@@ -1999,6 +2223,23 @@ export default function App() {
               }
 
               actionResults.push(`• ${result}`);
+              if (
+                action.type === "findDisplayText" &&
+                result.startsWith("Display text found:")
+              )
+                displayLookups++;
+              if (
+                displayTaskId &&
+                action.type === "findDisplayText" &&
+                result.startsWith("Display text found:")
+              )
+                displayPhase = "replace";
+              if (
+                displayTaskId &&
+                action.type === "replaceText" &&
+                result === "Display text changed; not submitted"
+              )
+                displayPhase = "report";
               if (
                 result.includes("not found") ||
                 result.includes("Error") ||
@@ -2077,7 +2318,11 @@ export default function App() {
 
           // Only continue autonomous loop in agent mode
           // For chat mode, stop after first execution (user can click "つづけて" to continue)
-          if (!supportsAutonomousLoopProvider(settings.provider)) {
+          if (
+            !supportsAutonomousLoopProvider(settings.provider) &&
+            displayPhase === "normal" &&
+            !correctDisplayFormat
+          ) {
             console.log(
               "[Agent] Chat mode - stopping after first action. Use Agent mode for autonomous loop.",
             );
@@ -2130,7 +2375,10 @@ export default function App() {
             }
           } else {
             updatedPageContent = await extractPageContent({
-              mode: wantsContentOnly ? "content" : "interactive",
+              mode:
+                wantsContentOnly && (!editingForRun || displayLookupSupported)
+                  ? "content"
+                  : "interactive",
               autoScrollForLazyLoad: wantsContentOnly && autoScrollForLazyLoad,
             });
           }
@@ -2146,7 +2394,20 @@ export default function App() {
               : undefined;
           context.pageStatus = pageStateRef.current?.status ?? "failed";
           context.allowedActions = effectiveBrowserActions(context);
-          if (!context.allowedActions.length) break;
+          if (
+            displayTaskId &&
+            (displayPhase !== "normal" || correctDisplayFormat)
+          ) {
+            context.fileOperationsEnabled = false;
+            context.allowedActions =
+              displayPhase === "report"
+                ? []
+                : displayPhase === "replace"
+                  ? ["findDisplayText", "replaceText"]
+                  : ["findDisplayText"];
+          }
+          if (!context.allowedActions.length && displayPhase !== "report")
+            break;
           conversationHistory = [
             ...conversationHistory,
             {
@@ -2216,6 +2477,7 @@ export default function App() {
                 role: "assistant",
                 content: "",
                 source: continuedSource,
+                commandsNotExecuted: displayPhase === "report",
                 incomplete: true,
               },
             ]);
@@ -2229,6 +2491,7 @@ export default function App() {
                     role: "assistant",
                     content,
                     source: continuedSource,
+                    commandsNotExecuted: displayPhase === "report",
                     incomplete: true,
                   };
                   return newMessages;
@@ -2245,6 +2508,24 @@ export default function App() {
                   : message,
               ),
             );
+            if (
+              displayPhase === "report" &&
+              (currentResponse.includes("[ACTION:") ||
+                currentResponse.includes("[FILE:") ||
+                currentResponse.includes("__DOWNLOAD_FILE__:"))
+            ) {
+              setMessages((previous) => [
+                ...previous,
+                {
+                  role: "assistant",
+                  kind: "notice",
+                  content:
+                    language === "ja"
+                      ? "結果報告内の追加操作は実行していません。"
+                      : "Additional actions in the final report were not executed.",
+                },
+              ]);
+            }
             if (!currentResponse.trim()) {
               setMessages((prev: ChatMessage[]) => {
                 const newMessages = [...prev];
@@ -2287,7 +2568,7 @@ export default function App() {
           }
         }
 
-        if (loopCount >= safeMaxAgentLoops) {
+        if (loopCount >= safeMaxAgentLoops && displayPhase !== "report") {
           setMessages((prev: ChatMessage[]) => [
             ...prev,
             {
@@ -2418,7 +2699,17 @@ export default function App() {
         ]);
       }
     } finally {
+      if (displayTaskId) {
+        void chrome.runtime
+          .sendMessage({
+            type: "display-edit",
+            operation: "end",
+            taskId: displayTaskId,
+          })
+          .catch(() => undefined);
+      }
       activeDisplayEditRef.current = false;
+      activeDisplayOriginRef.current = "";
       if (editingForRun) setDisplayEditingEnabled(false);
       if (abortControllerRef.current?.signal.aborted) {
         setMessages((previous) =>
@@ -2920,13 +3211,16 @@ export default function App() {
                           APPROVED_BUTTON_ORIGINS_KEY,
                         );
                         const current = stored[APPROVED_BUTTON_ORIGINS_KEY];
-                        const next = {
-                          ...(current &&
-                          typeof current === "object" &&
-                          !Array.isArray(current)
-                            ? current
-                            : {}),
-                        };
+                        const next: Record<string, boolean> =
+                          Object.fromEntries(
+                            Object.entries(
+                              current &&
+                                typeof current === "object" &&
+                                !Array.isArray(current)
+                                ? current
+                                : {},
+                            ).filter(([, value]) => typeof value === "boolean"),
+                          );
                         delete next[origin];
                         await chrome.storage.local.set({
                           [APPROVED_BUTTON_ORIGINS_KEY]: next,
@@ -2940,23 +3234,95 @@ export default function App() {
                 ))}
             </details>
           )}
-          <label className="flex items-center gap-1">
-            <input
-              type="checkbox"
-              checked={displayEditingEnabled}
+          <label className="flex items-center gap-1 min-w-0">
+            <span>{language === "ja" ? "表示編集" : "Display editing"}</span>
+            <select
+              aria-label={
+                language === "ja"
+                  ? "表示編集の許可"
+                  : "Display editing permission"
+              }
+              title={displaySiteOrigin}
+              className="border rounded p-1 min-w-0 max-w-full disabled:opacity-50"
+              value={
+                displayEditOrigins.includes(displaySiteOrigin)
+                  ? "site"
+                  : displayEditingEnabled
+                    ? "once"
+                    : "off"
+              }
               disabled={
-                isLoading ||
+                displayPermissionSaving ||
+                !displaySiteOrigin ||
                 !browserActionsEnabled ||
                 assistantSettings.mode === "read-only"
               }
-              onChange={(event) =>
-                setDisplayEditingEnabled(event.target.checked)
-              }
-            />
-            {language === "ja"
-              ? "次のタスクで表示を編集"
-              : "Edit display in next task"}
+              onChange={async (event) => {
+                const mode = event.target.value;
+                const origin = displaySiteOrigin;
+                stopGeneration();
+                setDisplayEditingEnabled(false);
+                if (await saveDisplayPermission(origin, mode === "site")) {
+                  if (displaySiteOriginRef.current === origin) {
+                    displayOnceOriginRef.current =
+                      mode === "once" ? origin : "";
+                    setDisplayEditingEnabled(mode === "once");
+                  }
+                }
+              }}
+            >
+              <option value="off">
+                {language === "ja" ? "許可しない" : "Off"}
+              </option>
+              <option value="once">
+                {language === "ja" ? "今回だけ" : "This task"}
+              </option>
+              <option value="site">
+                {language === "ja"
+                  ? "このサイトでは常に許可"
+                  : "Always on this site"}
+              </option>
+            </select>
           </label>
+          {displayPermissionError && (
+            <span role="alert" className="text-red-700">
+              {language === "ja"
+                ? "表示編集の許可を保存できませんでした。選び直してください。"
+                : "Could not save display permission. Select it again."}
+            </span>
+          )}
+          {displayEditOrigins.length > 0 && (
+            <details className="text-xs max-w-full">
+              <summary className="cursor-pointer">
+                {language === "ja"
+                  ? "表示編集の許可サイト"
+                  : "Display editing sites"}
+              </summary>
+              {displayEditOrigins.map((origin) => (
+                <div
+                  key={origin}
+                  className="flex items-center gap-2 max-w-full"
+                >
+                  <span className="truncate" title={origin}>
+                    {origin}
+                  </span>
+                  <button
+                    type="button"
+                    className="text-red-700 shrink-0"
+                    disabled={displayPermissionSaving}
+                    aria-label={`${origin} ${language === "ja" ? "の表示編集許可を解除" : "revoke display permission"}`}
+                    onClick={() => {
+                      if (origin === activeDisplayOriginRef.current)
+                        stopGeneration();
+                      void saveDisplayPermission(origin, false);
+                    }}
+                  >
+                    {language === "ja" ? "解除" : "Revoke"}
+                  </button>
+                </div>
+              ))}
+            </details>
+          )}
           {activeTabId !== null && undoDisplayTabIds.has(activeTabId) && (
             <button
               type="button"

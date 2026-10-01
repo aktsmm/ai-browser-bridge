@@ -2,6 +2,14 @@
 // サイドパネルの開閉制御、コンテキストメニュー
 import { isValidDownloadId } from "./sidepanel/download-id";
 import {
+  createDisplayEditOwner,
+  type DisplayOwnerMessage,
+} from "./sidepanel/display-edit-owner";
+import {
+  DISPLAY_EDIT_ORIGINS_KEY,
+  normalizeDisplayEditOrigins,
+} from "./sidepanel/display-edit-permission";
+import {
   ASSISTANT_SETTINGS_KEY,
   normalizeAssistantSettings,
 } from "./sidepanel/assistant-settings";
@@ -54,7 +62,7 @@ export const POST_PARENT_MENU_ID = "postAboutPage";
 export type ContextMenuSpec = {
   id: string;
   title: string;
-  contexts: chrome.contextMenus.ContextType[];
+  contexts: ["page" | "selection", ...("page" | "selection")[]];
   parentId?: string;
 };
 
@@ -315,11 +323,20 @@ export default defineBackground({
       },
     );
 
+    const displayOwner = createDisplayEditOwner();
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === "local" && changes[DISPLAY_EDIT_ORIGINS_KEY])
+        displayOwner.revokeOrigins(
+          normalizeDisplayEditOrigins(
+            changes[DISPLAY_EDIT_ORIGINS_KEY].newValue,
+          ),
+        );
+    });
     // メッセージハンドラ（ダウンロード等）
     browser.runtime.onMessage.addListener(
       (
         message: unknown,
-        _sender: chrome.runtime.MessageSender,
+        sender: chrome.runtime.MessageSender,
         sendResponse: (response: unknown) => void,
       ) => {
         if (!message || typeof message !== "object") {
@@ -333,6 +350,41 @@ export default defineBackground({
           mimeType?: string;
           downloadId?: number;
         };
+
+        if (typedMessage.type === "display-edit") {
+          if (
+            sender.id !== chrome.runtime.id ||
+            sender.url !== chrome.runtime.getURL("sidepanel.html")
+          ) {
+            sendResponse({ ok: false });
+            return;
+          }
+          let responded = false;
+          const timer = setTimeout(() => {
+            responded = true;
+            sendResponse({
+              ok: false,
+              result:
+                "Error: display operation outcome is unverified; inspect the page before retrying",
+            });
+          }, 10000);
+          void displayOwner
+            .handle(message as DisplayOwnerMessage)
+            .then(
+              (result) => {
+                if (!responded) sendResponse(result);
+              },
+              () => {
+                if (!responded)
+                  sendResponse({
+                    ok: false,
+                    result: "Error: display operation could not be verified",
+                  });
+              },
+            )
+            .finally(() => clearTimeout(timer));
+          return true;
+        }
 
         if (typedMessage.type === "download-file") {
           const { filename, content, mimeType } = typedMessage;

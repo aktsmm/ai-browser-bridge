@@ -104,12 +104,20 @@ export async function loadPaymentCard(): Promise<SealedPaymentCard | null> {
   const result = (await chrome.storage.local.get(PAYMENT_CARD_KEY))[
     PAYMENT_CARD_KEY
   ];
-  return result &&
-    typeof result.salt === "string" &&
-    typeof result.iv === "string" &&
-    typeof result.ciphertext === "string" &&
-    /^\d{4}$/.test(result.lastFour)
-    ? (result as SealedPaymentCard)
+  if (!result || typeof result !== "object" || Array.isArray(result))
+    return null;
+  const record = result as Record<string, unknown>;
+  return typeof record.salt === "string" &&
+    typeof record.iv === "string" &&
+    typeof record.ciphertext === "string" &&
+    typeof record.lastFour === "string" &&
+    /^\d{4}$/.test(record.lastFour)
+    ? {
+        salt: record.salt,
+        iv: record.iv,
+        ciphertext: record.ciphertext,
+        lastFour: record.lastFour,
+      }
     : null;
 }
 

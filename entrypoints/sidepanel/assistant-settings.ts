@@ -84,9 +84,13 @@ export function buildChatContext(
   browserActionsEnabled = true,
   uiLanguage: Language = "ja",
   displayEditingEnabled = false,
+  displayTextLookupSupported = false,
 ): ChatContext {
   const context: ChatContext = {
     version: 1,
+    ...(displayEditingEnabled && displayTextLookupSupported
+      ? { displayTextLookupVersion: 1 as const }
+      : {}),
     mode: task || !browserActionsEnabled ? "read-only" : settings.mode,
     displayEditingEnabled:
       !task &&

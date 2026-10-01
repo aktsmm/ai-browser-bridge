@@ -8,8 +8,59 @@ import {
   isChatContext,
 } from "../../standalone-bridge/src/chat-context";
 import { t } from "./i18n";
+import {
+  canEditDisplay,
+  displayEditOrigin,
+  normalizeDisplayEditOrigins,
+} from "./display-edit-permission";
 
 describe("assistant settings", () => {
+  it("remembers display editing only for exact, valid site origins", () => {
+    const origins = normalizeDisplayEditOrigins([
+      "https://example.com",
+      "https://example.com",
+      "https://example.com/path",
+      "https://user:secret@example.com",
+      "chrome://settings",
+      "https://other.example",
+      null,
+    ]);
+    expect(origins).toEqual(["https://example.com", "https://other.example"]);
+    expect(
+      normalizeDisplayEditOrigins({ "https://example.com": true }),
+    ).toEqual([]);
+    expect(displayEditOrigin("https://example.com/page")).toBe(
+      "https://example.com",
+    );
+    const options = {
+      url: "https://example.com/page",
+      mode: "input",
+      browserActionsEnabled: true,
+      task: false,
+      once: false,
+      origins,
+    };
+    expect(canEditDisplay(options)).toBe(true);
+    expect(canEditDisplay({ ...options, url: "https://sub.example.com" })).toBe(
+      false,
+    );
+    expect(canEditDisplay({ ...options, url: "http://example.com" })).toBe(
+      false,
+    );
+    expect(canEditDisplay({ ...options, mode: "read-only", once: true })).toBe(
+      false,
+    );
+    expect(canEditDisplay({ ...options, task: true, once: true })).toBe(false);
+    expect(canEditDisplay({ ...options, browserActionsEnabled: false })).toBe(
+      false,
+    );
+    expect(canEditDisplay({ ...options, origins: [] })).toBe(false);
+    expect(canEditDisplay({ ...options, once: true, origins: [] })).toBe(true);
+    expect(canEditDisplay({ ...options, url: "", once: true })).toBe(false);
+    expect(canEditDisplay({ ...options, mode: "unknown", once: true })).toBe(
+      false,
+    );
+  });
   it("defaults to input assist and preserves bounded, unique profiles", () => {
     expect(normalizeAssistantSettings(null).mode).toBe("input");
     expect(normalizeAssistantSettings(null).responseLanguage).toBe("inherit");
@@ -138,6 +189,43 @@ describe("assistant settings", () => {
     ).not.toContain("replaceText");
   });
   it("does not report a requested download as saved without a completion result", () => {
+    const lookup = buildChatContext(
+      normalizeAssistantSettings({ mode: "input" }),
+      { tabId: 2, url: "https://example.com/" },
+      "ok",
+      undefined,
+      true,
+      "ja",
+      true,
+      true,
+    );
+    expect(lookup.allowedActions).toContain("findDisplayText");
+    expect(isChatContext(lookup)).toBe(true);
+    expect(isChatContext({ ...lookup, displayTextLookupVersion: 2 })).toBe(
+      false,
+    );
+    expect(buildContextInstructions(lookup, "standalone")).toContain(
+      "static headings inside forms",
+    );
+    expect(
+      buildContextInstructions(
+        { ...lookup, allowedActions: ["replaceText"] },
+        "standalone",
+      ),
+    ).toContain("ref:f0:d<token>");
+    expect(
+      buildContextInstructions({ ...lookup, allowedActions: [] }, "standalone"),
+    ).not.toContain("[ACTION: findDisplayText");
+    expect(
+      buildContextInstructions(
+        {
+          ...lookup,
+          displayTextLookupVersion: undefined,
+          allowedActions: ["replaceText"],
+        },
+        "standalone",
+      ),
+    ).toContain("do not target forms");
     const context = buildChatContext(
       normalizeAssistantSettings({ mode: "automation" }),
       { tabId: 2, url: "https://example.com/" },

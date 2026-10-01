@@ -24,12 +24,30 @@ export interface ChatMessage {
   kind?: "notice" | "error";
   source?: { pageTitle: string; pageUrl: string };
   incomplete?: boolean;
+  commandsNotExecuted?: boolean;
+}
+
+export function isDisplayActionRequest(message: ChatMessage): boolean {
+  if (message.role !== "assistant") return false;
+  const match = message.content
+    .trim()
+    .match(
+      /^(?:\[Agent Mode:[^\]]+\]\s*)*\[ACTION:\s*(?:findDisplayText|replaceText),\s*(\{[\s\S]*\})\]$/,
+    );
+  if (!match) return false;
+  try {
+    const value: unknown = JSON.parse(match[1]);
+    return value !== null && typeof value === "object" && !Array.isArray(value);
+  } catch {
+    return false;
+  }
 }
 
 export function isAssistantAnswer(message: ChatMessage): boolean {
   return (
     message.role === "assistant" &&
     !message.kind &&
+    !isDisplayActionRequest(message) &&
     Boolean(message.content.trim()) &&
     !message.content.trim().startsWith("⚠️")
   );
@@ -68,6 +86,7 @@ export interface BridgeProviderCapability {
 
 export interface BridgeCapabilities {
   contextVersion?: number;
+  displayTextLookupVersion?: 1;
   browserBackend?: "extension-dom";
   version: string;
   bridge?: "vscode" | "standalone";
@@ -96,6 +115,7 @@ export type BrowserAction =
       slowly?: boolean;
     }
   | { type: "scroll"; direction: "up" | "down"; amount?: number }
+  | { type: "findDisplayText"; text: string }
   | { type: "replaceText"; selector: string; text: string }
   | { type: "replaceText"; edits: { selector: string; text: string }[] }
   | { type: "back" }

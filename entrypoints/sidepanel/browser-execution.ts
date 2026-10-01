@@ -3,12 +3,15 @@ import {
   type ChatContext,
 } from "../../standalone-bridge/src/chat-context";
 import type { BrowserAction } from "./types";
+import { displayEditOrigin } from "./display-edit-permission";
 
 export interface BrowserSession {
   context: ChatContext;
   frames: { frameId: number; documentId?: string; origin?: string }[];
   personal?: Record<string, string>;
   signal?: AbortSignal;
+  authorizeDisplayEdit?: () => Promise<boolean>;
+  displayTaskId?: string;
   approvedClick?: {
     selector: string;
     documentId: string;
@@ -21,6 +24,7 @@ interface DisplayEdit {
   url: string;
   documentId: string;
   changes: { marker: string; previousText: string; replacementText: string }[];
+  editId?: string;
 }
 const displayEdits = new Map<number, DisplayEdit[]>();
 
@@ -32,14 +36,61 @@ export function hasUndoableDisplayEdit(tabId: number): boolean {
   return Boolean(displayEdits.get(tabId)?.length);
 }
 
+export async function recoverDisplayEdits(tabId: number): Promise<void> {
+  const result = await chrome.runtime.sendMessage({
+    type: "display-edit",
+    operation: "recover",
+    tabId,
+  });
+  if (!result?.ok || !Array.isArray(result.edits)) return;
+  const recovered = result.edits
+    .filter(
+      (edit: Record<string, unknown>) =>
+        typeof edit.url === "string" &&
+        typeof edit.documentId === "string" &&
+        typeof edit.editId === "string",
+    )
+    .map((edit: { url: string; documentId: string; editId: string }) => ({
+      ...edit,
+      changes: [],
+    }));
+  const legacy = (displayEdits.get(tabId) ?? []).filter((edit) => !edit.editId);
+  const history = [...legacy, ...recovered].slice(-20);
+  if (history.length) displayEdits.set(tabId, history);
+  else displayEdits.delete(tabId);
+}
+
 export async function undoLastDisplayEdit(tabId: number): Promise<boolean> {
   const edits = displayEdits.get(tabId);
   const edit = edits?.at(-1);
   if (!edit) return false;
   try {
-    if ((await chrome.tabs.get(tabId)).url !== edit.url) {
+    const currentUrl = (await chrome.tabs.get(tabId)).url;
+    if (
+      edit.editId
+        ? displayEditOrigin(currentUrl) !== displayEditOrigin(edit.url)
+        : currentUrl !== edit.url
+    ) {
       displayEdits.delete(tabId);
       return false;
+    }
+    if (edit.editId) {
+      const result = await chrome.runtime.sendMessage({
+        type: "display-edit",
+        operation: "undo",
+        tabId,
+        url: edit.url,
+        documentId: edit.documentId,
+        editId: edit.editId,
+      });
+      if (!result?.ok) {
+        edits!.pop();
+        if (!edits!.length) displayEdits.delete(tabId);
+        return false;
+      }
+      edits!.pop();
+      if (!edits!.length) displayEdits.delete(tabId);
+      return true;
     }
     const result = await chrome.scripting.executeScript({
       target: { tabId, documentIds: [edit.documentId] },
@@ -108,6 +159,13 @@ export function browserActionAllowed(
   context: ChatContext,
 ): boolean {
   if (!effectiveBrowserActions(context).includes(action.type)) return false;
+  if (action.type === "findDisplayText")
+    return (
+      typeof action.text === "string" &&
+      action.text.trim().length > 0 &&
+      action.text.length <= 160 &&
+      !/[\r\n]/.test(action.text)
+    );
   if (action.type === "replaceText") {
     const edits = "edits" in action ? action.edits : [action];
     if (
@@ -117,7 +175,11 @@ export function browserActionAllowed(
       edits.some(
         (edit) =>
           typeof edit.selector !== "string" ||
-          !/^(?:ref:)?(?:f\d+:)?e\d+$/i.test(edit.selector) ||
+          !(
+            context.displayTextLookupVersion === 1
+              ? /^ref:f\d+:d[a-f0-9]{32}$/
+              : /^(?:ref:)?(?:f\d+:)?e\d+$/i
+          ).test(edit.selector) ||
           typeof edit.text !== "string" ||
           !edit.text ||
           edit.text.length > 500 ||
@@ -284,6 +346,43 @@ export async function executeBoundBrowserAction(
   if (session.signal?.aborted) return "Error: task cancelled";
   if (tab.url !== target.url)
     return "Error: target page changed; acquire fresh context before continuing";
+  if (
+    (action.type === "replaceText" || action.type === "findDisplayText") &&
+    session.authorizeDisplayEdit
+  ) {
+    if (!(await session.authorizeDisplayEdit()) || session.signal?.aborted)
+      return "Error: display editing permission was revoked; nothing changed";
+  }
+  if (
+    session.context.displayTextLookupVersion === 1 &&
+    (action.type === "findDisplayText" || action.type === "replaceText")
+  ) {
+    if (!session.displayTaskId)
+      return "Error: display editing task is not active";
+    const result = await chrome.runtime.sendMessage({
+      type: "display-edit",
+      operation: action.type === "findDisplayText" ? "find" : "edit",
+      taskId: session.displayTaskId,
+      frames: session.frames,
+      ...(action.type === "findDisplayText"
+        ? { text: action.text }
+        : { edits: "edits" in action ? action.edits : [action] }),
+    });
+    if (result?.editId && result?.documentId) {
+      const edits = displayEdits.get(target.tabId) ?? [];
+      edits.push({
+        url: target.url,
+        documentId: result.documentId,
+        changes: [],
+        editId: result.editId,
+      });
+      if (edits.length > 20) edits.shift();
+      displayEdits.set(target.tabId, edits);
+    }
+    return typeof result?.result === "string"
+      ? result.result
+      : "Error: display operation could not be verified";
+  }
   if (action.type === "navigate") {
     let url: URL;
     try {

@@ -3,9 +3,47 @@ import http from "http";
 import net from "net";
 import os from "os";
 import path from "path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { StandaloneBridgeServer, buildSystemPrompt } from "../src/index.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  StandaloneBridgeServer,
+  buildSystemPrompt,
+  buildRestrictedCopilotCliArgs,
+  MAX_CHAT_MESSAGES,
+  MAX_CHAT_MESSAGE_LENGTH,
+  MAX_CHAT_HISTORY_LENGTH,
+} from "../src/index.js";
 const TRUSTED_HEADERS = { "X-Copilot-Bridge-Client": "chrome-extension" };
+const sdkProbe = vi.hoisted(() => ({
+  hold: false,
+  started: false,
+  aborted: false,
+  release: undefined as (() => void) | undefined,
+}));
+vi.mock("@github/copilot-sdk", () => ({
+  CopilotClient: class {
+    async createSession() {
+      return {
+        sendAndWait: async () => {
+          sdkProbe.started = true;
+          if (sdkProbe.hold)
+            await new Promise<void>((resolve) => {
+              sdkProbe.release = resolve;
+            });
+          else await new Promise<void>((resolve) => setImmediate(resolve));
+          return { data: { content: "Delayed synthetic SDK reply" } };
+        },
+        abort: async () => {
+          sdkProbe.aborted = true;
+          sdkProbe.release?.();
+        },
+        disconnect: async () => {},
+      };
+    }
+    async stop() {
+      return [];
+    }
+  },
+}));
 function getFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const probe = net.createServer();
@@ -70,10 +108,27 @@ function startFakeMcpServer(
   });
 }
 describe("standalone bridge server", () => {
+  it("denies native CLI tools rather than relying on page/prompt instructions", () => {
+    expect(buildRestrictedCopilotCliArgs("Synthetic prompt")).toEqual([
+      "-p",
+      "Synthetic prompt",
+      "--silent",
+      "--available-tools=__browser_bridge_no_native_tools__",
+      "--deny-tool=shell",
+      "--deny-tool=write",
+      "--deny-tool=read",
+      "--no-custom-instructions",
+      "--no-ask-user",
+    ]);
+  });
   let server: StandaloneBridgeServer;
   let baseUrl: string;
   let workspaceRoot: string;
   beforeEach(async () => {
+    sdkProbe.hold = false;
+    sdkProbe.started = false;
+    sdkProbe.aborted = false;
+    sdkProbe.release = undefined;
     workspaceRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "bridge-standalone-"),
     );
@@ -85,6 +140,114 @@ describe("standalone bridge server", () => {
   afterEach(() => {
     server.stop();
     fs.rmSync(workspaceRoot, { recursive: true, force: true });
+  });
+  it.each([
+    {
+      name: "message count",
+      contents: Array.from({ length: MAX_CHAT_MESSAGES + 1 }, () => "a"),
+    },
+    {
+      name: "message length",
+      contents: ["a".repeat(MAX_CHAT_MESSAGE_LENGTH + 1)],
+    },
+    {
+      name: "history length",
+      contents: [
+        ...Array.from(
+          { length: MAX_CHAT_HISTORY_LENGTH / MAX_CHAT_MESSAGE_LENGTH },
+          () => "a".repeat(MAX_CHAT_MESSAGE_LENGTH),
+        ),
+        "a",
+      ],
+    },
+  ])(
+    "rejects oversized $name before invoking the provider",
+    async ({ contents }) => {
+      const response = await fetch(`${baseUrl}/chat`, {
+        method: "POST",
+        headers: { ...TRUSTED_HEADERS, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          settings: { provider: "copilot-sdk", copilot: { model: "" } },
+          pageContent: "Synthetic page",
+          messages: contents.map((content) => ({ role: "user", content })),
+        }),
+      });
+      expect(response.status).toBe(400);
+      expect((await response.json()).error).toContain("before retrying");
+      expect(sdkProbe.started).toBe(false);
+    },
+  );
+  it("accepts the cumulative history boundary without silently trimming it", async () => {
+    const response = await fetch(`${baseUrl}/chat`, {
+      method: "POST",
+      headers: { ...TRUSTED_HEADERS, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        settings: { provider: "copilot-sdk", copilot: { model: "" } },
+        pageContent: "Synthetic page",
+        messages: Array.from(
+          { length: MAX_CHAT_HISTORY_LENGTH / MAX_CHAT_MESSAGE_LENGTH },
+          () => ({
+            role: "user",
+            content: "a".repeat(MAX_CHAT_MESSAGE_LENGTH),
+          }),
+        ),
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("Delayed synthetic SDK reply");
+    expect(sdkProbe.started).toBe(true);
+  });
+  it("keeps a delayed provider reply alive after the request body completes", async () => {
+    const response = await fetch(`${baseUrl}/chat`, {
+      method: "POST",
+      headers: { ...TRUSTED_HEADERS, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        settings: {
+          provider: "copilot-sdk",
+          copilot: { model: "" },
+          lmStudio: { endpoint: "http://127.0.0.1:1234", model: "" },
+        },
+        messages: [
+          { role: "user", content: "Reply on this synthetic test only." },
+        ],
+        pageContent: "Synthetic local page",
+        operationMode: "text",
+        context: {
+          version: 1,
+          mode: "read-only",
+          allowedActions: [],
+          pageStatus: "ok",
+          globalInstructions: "",
+          profileInstructions: "",
+          taskInstructions: "",
+        },
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("Delayed synthetic SDK reply");
+  });
+  it("aborts the provider when the response connection is cancelled", async () => {
+    sdkProbe.hold = true;
+    const controller = new AbortController();
+    const pending = fetch(`${baseUrl}/chat`, {
+      method: "POST",
+      headers: { ...TRUSTED_HEADERS, "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
+        settings: {
+          provider: "copilot-sdk",
+          copilot: { model: "" },
+          lmStudio: { endpoint: "http://localhost:1234", model: "" },
+        },
+        messages: [{ role: "user", content: "Synthetic cancellation test" }],
+        pageContent: "Synthetic page",
+        operationMode: "text",
+      }),
+    }).catch(() => undefined);
+    await vi.waitFor(() => expect(sdkProbe.started).toBe(true));
+    controller.abort();
+    await pending;
+    await vi.waitFor(() => expect(sdkProbe.aborted).toBe(true));
   });
   it("coalesces repeated starts and can restart without losing the server", async () => {
     const first = server.start();

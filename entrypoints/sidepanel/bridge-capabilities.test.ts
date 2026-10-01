@@ -7,6 +7,7 @@ describe("parseBridgeCapabilities", () => {
     const parsed = parseBridgeCapabilities({
       version: "0.1.16",
       contextVersion: 1,
+      displayTextLookupVersion: 1,
       browserBackend: "extension-dom",
       bridge: "standalone",
       recommended: { chat: "vscode-lm", agent: "vscode-lm" },
@@ -32,6 +33,7 @@ describe("parseBridgeCapabilities", () => {
 
     expect(parsed?.bridge).toBe("standalone");
     expect(parsed?.contextVersion).toBe(1);
+    expect(parsed?.displayTextLookupVersion).toBe(1);
     expect(parsed?.browserBackend).toBe("extension-dom");
   });
 
