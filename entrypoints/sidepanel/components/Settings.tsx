@@ -42,8 +42,10 @@ interface SettingsProps {
   onClose: () => void;
   isConnected: boolean;
   availableModels: ModelInfo[];
+  modelFetching: boolean;
   modelFetchFailed: boolean;
   bridgeCapabilities: BridgeCapabilities | null;
+  capabilitiesRefreshing: boolean;
   capabilitiesErrorDetail: string | null;
   onRefreshCapabilities: () => void;
   onRefreshModels: () => void;
@@ -78,6 +80,8 @@ function supportsAgentControls(provider: LLMSettings["provider"]): boolean {
     "copilot-agent",
     "copilot-sdk",
     "copilot-cli",
+    "codex-cli",
+    "claude-code",
     "lm-studio",
   ].includes(provider);
 }
@@ -132,8 +136,10 @@ export function Settings({
   onClose,
   isConnected,
   availableModels,
+  modelFetching,
   modelFetchFailed,
   bridgeCapabilities,
+  capabilitiesRefreshing,
   capabilitiesErrorDetail,
   onRefreshCapabilities,
   onRefreshModels,
@@ -178,6 +184,30 @@ export function Settings({
   );
   const vscodeLmUnavailable =
     bridgeCapabilities !== null && vscodeLmCapability?.status !== "available";
+  const codexCapability = findBridgeProvider(bridgeCapabilities, "codex-cli");
+  const claudeCapability = findBridgeProvider(
+    bridgeCapabilities,
+    "claude-code",
+  );
+  const codexUnavailable = codexCapability?.status === "unavailable";
+  const claudeUnavailable = claudeCapability?.status === "unavailable";
+  const unknownConnection = {
+    status: "unknown" as const,
+    detail:
+      language === "ja"
+        ? "接続状態を取得できません。Bridge 状態を更新するか、bridge を更新してください。"
+        : "Connection status is unavailable. Refresh Bridge status or update the bridge.",
+  };
+  const directCapability = claudeCapability
+    ? (claudeCapability.connections?.direct ?? unknownConnection)
+    : undefined;
+  const gatewayCapability = claudeCapability
+    ? (claudeCapability.connections?.gateway ?? unknownConnection)
+    : undefined;
+  const directUnavailable = directCapability?.status === "unavailable";
+  const gatewayUnavailable = gatewayCapability?.status === "unavailable";
+  const allClaudeConnectionsUnavailable =
+    directUnavailable && gatewayUnavailable;
   const modelHelpId = "copilot-model-help";
   const evaluateHintId = "evaluate-action-hint";
   const modelHelpText =
@@ -408,11 +438,55 @@ export function Settings({
               />
               <span>LM Studio</span>
             </label>
+            <label
+              className={`flex items-center gap-2 ${codexUnavailable ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}
+            >
+              <input
+                type="radio"
+                name="provider"
+                checked={settings.provider === "codex-cli"}
+                disabled={codexUnavailable}
+                onChange={() =>
+                  onSettingsChange({ ...settings, provider: "codex-cli" })
+                }
+                className="text-blue-600"
+              />
+              <div>
+                <span>OpenAI Codex CLI</span>
+                <p className="text-xs text-gray-500">
+                  {language === "ja"
+                    ? "既存の Codex CLI ログインを使います。Auto fallback には入りません。"
+                    : "Uses your existing Codex CLI login and is never selected by Auto fallback."}
+                </p>
+              </div>
+            </label>
+            <label
+              className={`flex items-center gap-2 ${claudeUnavailable ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}
+            >
+              <input
+                type="radio"
+                name="provider"
+                checked={settings.provider === "claude-code"}
+                disabled={claudeUnavailable}
+                onChange={() =>
+                  onSettingsChange({ ...settings, provider: "claude-code" })
+                }
+                className="text-blue-600"
+              />
+              <div>
+                <span>Claude Code</span>
+                <p className="text-xs text-gray-500">
+                  {language === "ja"
+                    ? "通常の Claude Code または GW 経由を明示選択します。"
+                    : "Explicitly uses direct Claude Code or your GW connection."}
+                </p>
+              </div>
+            </label>
           </div>
           <p className="mt-2 text-xs text-gray-500">
             {language === "ja"
-              ? "通常は Auto を使ってください。SDK / CLI は bridge 状態の診断と fallback 用に表示され、通常の provider としては選択しません。"
-              : "Use Auto for normal work. SDK and CLI are shown in bridge status as diagnostic/fallback routes, not primary provider choices."}
+              ? "Auto は既存経路だけを使います。Codex CLI と Claude Code は選択したときだけ実行します。"
+              : "Auto keeps the existing routes. Codex CLI and Claude Code run only when explicitly selected."}
           </p>
         </fieldset>
 
@@ -460,9 +534,17 @@ export function Settings({
             <button
               type="button"
               onClick={() => onRefreshCapabilities()}
-              className="text-xs text-blue-600 hover:underline"
+              disabled={capabilitiesRefreshing}
+              aria-busy={capabilitiesRefreshing}
+              className="text-xs text-blue-600 hover:underline disabled:cursor-wait disabled:text-gray-500 disabled:no-underline"
             >
-              {t("refresh", language)}
+              <span role="status" aria-live="polite">
+                {capabilitiesRefreshing
+                  ? language === "ja"
+                    ? "更新中..."
+                    : "Refreshing..."
+                  : t("refresh", language)}
+              </span>
             </button>
           </div>
           {!isConnected && (
@@ -533,14 +615,22 @@ export function Settings({
               </label>
               <button
                 onClick={() => onRefreshModels()}
-                className="text-xs text-blue-600 hover:underline"
+                disabled={modelFetching}
+                aria-busy={modelFetching}
+                className="text-xs text-blue-600 hover:underline disabled:cursor-wait disabled:text-gray-500 disabled:no-underline"
               >
-                {t("refresh", language)}
+                <span role="status" aria-live="polite">
+                  {modelFetching
+                    ? language === "ja"
+                      ? "更新中..."
+                      : "Refreshing..."
+                    : t("refresh", language)}
+                </span>
               </button>
             </div>
             <select
               value={selectedModelIsLive ? settings.copilot.model : ""}
-              disabled={!hasLiveCopilotModels}
+              disabled={!hasLiveCopilotModels || modelFetching}
               aria-describedby={modelHelpText ? modelHelpId : undefined}
               onChange={(e) =>
                 onSettingsChange({
@@ -617,6 +707,157 @@ export function Settings({
               />
             </div>
           </>
+        )}
+
+        {settings.provider === "codex-cli" && (
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              {language === "ja"
+                ? "Codex モデル（任意）"
+                : "Codex model (optional)"}
+            </label>
+            <input
+              type="text"
+              value={settings.codexCli.model}
+              onChange={(event) =>
+                onSettingsChange({
+                  ...settings,
+                  codexCli: { model: event.target.value },
+                })
+              }
+              placeholder={
+                language === "ja"
+                  ? "空欄でCLI既定"
+                  : "Leave blank for CLI default"
+              }
+              className="w-full p-2 border rounded"
+            />
+          </div>
+        )}
+
+        {settings.provider === "claude-code" && (
+          <div className="mb-4 space-y-3">
+            {allClaudeConnectionsUnavailable && (
+              <div
+                role="alert"
+                className="rounded border border-red-200 bg-red-50 p-3"
+              >
+                <div className="text-sm font-medium text-red-900">
+                  {language === "ja"
+                    ? "Claude Code の接続を利用できません"
+                    : "Claude Code connections are unavailable"}
+                </div>
+                <p className="mt-1 text-xs text-red-800 break-words">
+                  {language === "ja"
+                    ? "Direct でサインインするか GW を修復してから、Bridge 状態を更新してください。上の一覧から別の provider に切り替えることもできます。"
+                    : "Sign in to Direct Claude Code or repair GW, then refresh Bridge status. You can also select another provider above."}
+                </p>
+              </div>
+            )}
+            <fieldset aria-busy={capabilitiesRefreshing}>
+              <legend className="block text-sm font-medium text-gray-700 mb-2">
+                {language === "ja" ? "接続方式" : "Connection"}
+              </legend>
+              <div className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
+                <div>
+                  <label
+                    className={`flex items-center gap-2 ${directUnavailable ? "cursor-not-allowed text-gray-500" : "cursor-pointer"}`}
+                  >
+                    <input
+                      type="radio"
+                      name="claude-connection"
+                      checked={settings.claudeCode.connection === "direct"}
+                      disabled={directUnavailable}
+                      onChange={() =>
+                        onSettingsChange({
+                          ...settings,
+                          claudeCode: {
+                            ...settings.claudeCode,
+                            connection: "direct",
+                          },
+                        })
+                      }
+                    />
+                    Direct
+                    {directCapability && (
+                      <span className="text-xs">
+                        {getBridgeProviderStatusLabel(
+                          directCapability.status,
+                          language,
+                        )}
+                      </span>
+                    )}
+                  </label>
+                  {directCapability?.detail && (
+                    <p className="ml-6 mt-1 text-xs text-gray-500 break-words">
+                      {directCapability.detail}
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <label
+                    className={`flex items-center gap-2 ${gatewayUnavailable ? "cursor-not-allowed text-gray-500" : "cursor-pointer"}`}
+                  >
+                    <input
+                      type="radio"
+                      name="claude-connection"
+                      checked={settings.claudeCode.connection === "gateway"}
+                      disabled={gatewayUnavailable}
+                      onChange={() =>
+                        onSettingsChange({
+                          ...settings,
+                          claudeCode: {
+                            ...settings.claudeCode,
+                            connection: "gateway",
+                          },
+                        })
+                      }
+                    />
+                    GW
+                    {gatewayCapability && (
+                      <span className="text-xs">
+                        {getBridgeProviderStatusLabel(
+                          gatewayCapability.status,
+                          language,
+                        )}
+                      </span>
+                    )}
+                  </label>
+                  {gatewayCapability?.detail && (
+                    <p className="ml-6 mt-1 text-xs text-gray-500 break-words">
+                      {gatewayCapability.detail}
+                    </p>
+                  )}
+                </div>
+              </div>
+            </fieldset>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                {language === "ja" ? "モデル（任意）" : "Model (optional)"}
+              </label>
+              <input
+                type="text"
+                value={settings.claudeCode.model}
+                onChange={(event) =>
+                  onSettingsChange({
+                    ...settings,
+                    claudeCode: {
+                      ...settings.claudeCode,
+                      model: event.target.value,
+                    },
+                  })
+                }
+                placeholder={
+                  settings.claudeCode.connection === "gateway"
+                    ? "copilot/claude-opus-5"
+                    : language === "ja"
+                      ? "空欄でCLI既定"
+                      : "Leave blank for CLI default"
+                }
+                className="w-full p-2 border rounded"
+              />
+            </div>
+          </div>
         )}
 
         {/* Browser Actions Toggle */}

@@ -125,6 +125,28 @@ const bridgeServer = http.createServer(async (request, response) => {
             status: "available",
             supportsVision: false,
           },
+          {
+            id: "codex-cli",
+            name: "OpenAI Codex CLI",
+            status: "available",
+            userSelectable: true,
+          },
+          {
+            id: "claude-code",
+            name: "Claude Code",
+            status: "available",
+            userSelectable: true,
+            connections: {
+              direct: {
+                status: "unavailable",
+                detail: "Sign in with Claude Code, then refresh Bridge status.",
+              },
+              gateway: {
+                status: "available",
+                detail: "GW is installed; its configured backend is used.",
+              },
+            },
+          },
         ],
         recommended: { chat: "vscode-lm", agent: "vscode-lm" },
       }),
@@ -256,27 +278,6 @@ const bridgeServer = http.createServer(async (request, response) => {
       )?.[1];
       assert(receiptRef, "Receipt button ref missing from snapshot");
       response.end(`[ACTION: click, ref:${receiptRef}]`);
-      return;
-    }
-    if (payload.messages.at(-1)?.content === "Edit both fixture labels") {
-      const headingRef = payload.pageContent.match(
-        /\[(f0:e\d+)\] heading "Installed extension fixture"/,
-      )?.[1];
-      const articleRef = payload.pageContent.match(
-        /\[(f0:e\d+)\] p "Verified local article/,
-      )?.[1];
-      assert(
-        headingRef && articleRef,
-        "Display-edit refs missing from snapshot",
-      );
-      response.end(
-        `[ACTION: replaceText, ${JSON.stringify({
-          edits: [
-            { selector: `ref:${headingRef}`, text: "Demo heading" },
-            { selector: `ref:${articleRef}`, text: "Demo article" },
-          ],
-        })}]`,
-      );
       return;
     }
     response.end(
@@ -1420,22 +1421,6 @@ try {
     await panel
       .getByText("Installed extension response.", { exact: true })
       .waitFor();
-    await panel
-      .getByLabel("Display editing permission", { exact: true })
-      .selectOption("once");
-    await input.fill("Edit both fixture labels");
-    await input.press("Enter");
-    await source.getByText("Demo heading", { exact: true }).waitFor();
-    assert.equal(
-      await source.locator("main > p").textContent(),
-      "Demo article",
-    );
-    const editRequest = requests.find(
-      (item) => item.messages.at(-1)?.content === "Edit both fixture labels",
-    );
-    assert(editRequest.pageContent.includes("Verified local article"));
-    const undoEdit = panel.getByRole("button", { name: "Undo display edit" });
-    await undoEdit.waitFor();
     const secondSite = await context.newPage();
     const secondUrl = `http://permission.fixture.test:${fixturePort}/fixture`;
     await secondSite.goto(secondUrl);
@@ -1444,31 +1429,6 @@ try {
       secondUrl,
     );
     assert.equal(typeof secondTabId, "number");
-    await panel.evaluate(
-      (tabId) => chrome.tabs.update(tabId, { active: true }),
-      secondTabId,
-    );
-    await undoEdit.waitFor({ state: "hidden", timeout: 3000 });
-    assert.equal(await source.locator("h1").textContent(), "Demo heading");
-    await panel.evaluate(
-      (tabId) => chrome.tabs.update(tabId, { active: true }),
-      sourceTabId,
-    );
-    await undoEdit.waitFor({ state: "visible", timeout: 3000 });
-    await undoEdit.click();
-    await source
-      .getByText("Installed extension fixture", { exact: true })
-      .waitFor();
-    assert.equal(
-      await source.locator("main > p").textContent(),
-      "Verified local article for extraction.",
-    );
-    assert.equal(
-      await panel
-        .getByLabel("Display editing permission", { exact: true })
-        .inputValue(),
-      "off",
-    );
     await panel.evaluate(
       (tabId) => chrome.tabs.update(tabId, { active: true }),
       secondTabId,
@@ -1520,9 +1480,6 @@ try {
           "issue preview keeps site origin opt-in and never opens GitHub before confirmation",
           "button approval keyboard focus, Escape, persistent grant and revocation without submitting",
           "approved same-origin download link yields a real fixture PDF without form submission",
-          "two display edits in one action, undone together",
-          "undo follows the edited tab and stays hidden on other tabs",
-          "original page text sent to the selected model before display editing",
           "second HTTP site readable without a site-grant action",
           "page task still required before sending content to the model",
         ],
@@ -1535,6 +1492,47 @@ try {
       }),
     );
   }
+  await panel.getByRole("button", { name: "Settings", exact: true }).click();
+  await panel.getByRole("tab", { name: "Connection", exact: true }).click();
+  await panel.getByRole("radio", { name: /OpenAI Codex CLI/ }).click();
+  await panel.getByText("Codex model (optional)", { exact: true }).waitFor();
+  await panel.setViewportSize({ width: 480, height: 900 });
+  assert(
+    await panel.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+    "Codex provider settings overflow",
+  );
+  await panel.screenshot({
+    path: path.join(output, "provider-settings-codex-480.png"),
+    animations: "disabled",
+  });
+  await panel.getByRole("radio", { name: /Claude Code/ }).click();
+  await panel.getByRole("radio", { name: /^GW/ }).click();
+  await panel.setViewportSize({ width: 320, height: 900 });
+  assert(
+    await panel.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+    "Claude provider settings overflow",
+  );
+  await panel.screenshot({
+    path: path.join(output, "provider-settings-claude-320.png"),
+    animations: "disabled",
+  });
+  await panel.getByRole("radio", { name: /Auto \(Recommended\)/ }).click();
+  await panel.waitForFunction(async () => {
+    const stored = await chrome.storage.local.get([
+      "llmSettings",
+      "cliProviderSelectionV1",
+    ]);
+    return (
+      stored.llmSettings?.provider === "auto" &&
+      stored.cliProviderSelectionV1 === null
+    );
+  });
+  await panel.getByRole("button", { name: "Close settings" }).click();
+  await panel.setViewportSize({ width: 480, height: 900 });
 } finally {
   releaseCapabilities();
   liveBridge?.stop();

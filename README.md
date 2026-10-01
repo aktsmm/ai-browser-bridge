@@ -69,7 +69,7 @@ npm run build
 npm.cmd run test:installed -- --playwright-module=../../split-shortcut/node_modules/playwright/index.mjs
 ```
 
-The PowerShell example uses `npm.cmd` to preserve option forwarding and the sibling workspace's Playwright; replace the module path for another installation. `--output-dir=<path>` changes the screenshot destination (default `.output/installed-extension-evidence`). The test uses real `chrome.storage`, `chrome.tabs`, `chrome.scripting`, document IDs and background downloads, and checks the downloaded Markdown bytes. It also verifies input/read-back without submission, first-time button approval followed by another button click without a prompt after a sidepanel reload, keyboard cancellation, revocation, and an approved same-origin fixture PDF download checked via Chrome's downloads API. Playwright manages temporary download filenames, so the fixture's generic download icon/name does not establish how files appear in a normal profile. Other checks cover two display edits undone together, original page text supplied to the model fixture before editing, delayed bridge readiness, and reading a second HTTP site without a site-specific grant. Temporary browser profiles and downloaded fixtures are removed on exit; only screenshots remain.
+The PowerShell example uses `npm.cmd` to preserve option forwarding and the sibling workspace's Playwright; replace the module path for another installation. `--output-dir=<path>` changes the screenshot destination (default `.output/installed-extension-evidence`). The test uses real `chrome.storage`, `chrome.tabs`, `chrome.scripting`, document IDs and background downloads, and checks the downloaded Markdown bytes. It also verifies input/read-back without submission, first-time button approval followed by another button click without a prompt after a sidepanel reload, keyboard cancellation, revocation, and an approved same-origin fixture PDF download checked via Chrome's downloads API. Playwright manages temporary download filenames, so the fixture's generic download icon/name does not establish how files appear in a normal profile. Display editing is tested only by `--display-only`, which negotiates the current display capability and opaque-handle protocol; the generic fixture deliberately does not exercise legacy numeric-ref display edits. Other generic checks cover delayed bridge readiness and reading a second HTTP site without a site-specific grant. Temporary browser profiles and downloaded fixtures are removed on exit; only screenshots remain.
 
 The model/bridge response is a local deterministic fixture. The sidepanel document runs as a real extension page in an owned tab, not in Chrome's native docked sidepanel. Chrome host permission grants/revocation, live providers and normal-profile CLI attachment are not implied by a passing test. The test does not approve browser permission dialogs automatically; button approval is a separate sidepanel control.
 
@@ -129,11 +129,15 @@ Available now: [Install from Chrome Web Store](https://chromewebstore.google.com
 
 Configure from the side panel settings button:
 
-- **Provider**: Auto / GitHub Copilot via VS Code / LM Studio
+- **Provider**: Auto / GitHub Copilot via VS Code / OpenAI Codex CLI / Claude Code / LM Studio
   - Auto prioritizes the VS Code Language Model API when the VS Code bridge is available. GitHub Copilot CLI is kept only as the last answer fallback.
-  - GitHub Copilot SDK / CLI are shown in Bridge Status as diagnostic or advanced fallback routes, not as normal provider choices.
+  - OpenAI Codex CLI and Claude Code run only when explicitly selected and are never added to Auto fallback.
+  - Claude Code supports direct `claude` and `GW` connections. Direct uses Claude Code's configured authentication/billing route; GW uses the explicitly selected gateway backend.
+  - Bridge Status probes Direct authentication and GW installation separately. Only a known-unavailable route is disabled; use **Refresh** after signing in or repairing a route.
+  - New CLI routes use an isolated temporary working directory with built-in tools, MCP, and Chrome integration disabled. Leave the model blank to use the CLI default.
+  - GitHub Copilot SDK / CLI remain diagnostic or advanced fallback routes in Bridge Status.
   - The **Auto route** section in Settings shows the provider order and status for the current operation mode
-- **Bridge Status**: Shows the local bridge version and provider availability for VS Code LM, Copilot SDK, Copilot CLI, and LM Studio
+- **Bridge Status**: Shows provider availability for VS Code LM, Copilot SDK, Copilot CLI, Codex CLI, Claude Code, and LM Studio
 - **Model Selection**: Shows only live user-visible Copilot models returned by the bridge. Static fallback models are not selectable when the live list is unavailable.
 - **Browser Actions**: Allow or block automatic browser control from the side panel
 - **File Operations**: Allow or block generated file saves through the bridge

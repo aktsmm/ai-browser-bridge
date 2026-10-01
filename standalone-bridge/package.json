@@ -8,7 +8,7 @@
     "build": "tsc -p ./",
     "start": "node ./out/src/index.js",
     "dev": "tsx src/index.ts",
-    "test": "vitest run tests/server.test.ts",
+    "test": "vitest run tests",
     "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\" --max-warnings=0"
   },
   "dependencies": {

@@ -112,10 +112,13 @@ const DEFAULT_SETTINGS: LLMSettings = {
     endpoint: "http://localhost:1234",
     model: "",
   },
+  codexCli: { model: "" },
+  claudeCode: { connection: "gateway", model: "" },
 };
 
 const DEFAULT_SAVE_RELATIVE_PATH = "output/blog";
 const APPROVED_BUTTON_ORIGINS_KEY = "approvedButtonOriginsV1";
+const CLI_PROVIDER_SETTINGS_KEY = "cliProviderSelectionV1";
 const HIGH_RISK_ACTION_TYPES: ReadonlySet<BrowserAction["type"]> = new Set([
   "newTab",
   "closeTab",
@@ -156,6 +159,8 @@ function supportsAutonomousLoopProvider(
     "copilot-agent",
     "copilot-sdk",
     "copilot-cli",
+    "codex-cli",
+    "claude-code",
     "lm-studio",
   ].includes(provider);
 }
@@ -172,6 +177,8 @@ function isValidLlmSettings(value: unknown): value is LLMSettings {
     candidate.provider !== "copilot-agent" &&
     candidate.provider !== "copilot-sdk" &&
     candidate.provider !== "copilot-cli" &&
+    candidate.provider !== "codex-cli" &&
+    candidate.provider !== "claude-code" &&
     candidate.provider !== "lm-studio"
   ) {
     return false;
@@ -191,18 +198,30 @@ function isValidLlmSettings(value: unknown): value is LLMSettings {
 }
 
 function normalizeLoadedLlmSettings(settings: LLMSettings): LLMSettings {
+  const normalized: LLMSettings = {
+    ...DEFAULT_SETTINGS,
+    ...settings,
+    copilot: { ...DEFAULT_SETTINGS.copilot, ...settings.copilot },
+    lmStudio: { ...DEFAULT_SETTINGS.lmStudio, ...settings.lmStudio },
+    codexCli: { ...DEFAULT_SETTINGS.codexCli, ...settings.codexCli },
+    claudeCode: { ...DEFAULT_SETTINGS.claudeCode, ...settings.claudeCode },
+  };
   if (settings.provider === "copilot") {
-    return { ...settings, provider: "copilot-agent" };
+    return { ...normalized, provider: "copilot-agent" };
   }
 
   if (
     settings.provider === "copilot-sdk" ||
     settings.provider === "copilot-cli"
   ) {
-    return { ...settings, provider: "auto" };
+    return { ...normalized, provider: "auto" };
   }
 
-  return settings;
+  return normalized;
+}
+
+function isExplicitCliProvider(provider: LLMSettings["provider"]): boolean {
+  return provider === "codex-cli" || provider === "claude-code";
 }
 
 export default function App() {
@@ -242,6 +261,7 @@ export default function App() {
   const [showIssueReport, setShowIssueReport] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
+  const [isFetchingModels, setIsFetchingModels] = useState(false);
   const [modelFetchFailed, setModelFetchFailed] = useState(false);
   const [connectionErrorDetail, setConnectionErrorDetail] = useState<
     string | null
@@ -254,6 +274,10 @@ export default function App() {
   const [capabilitiesErrorDetail, setCapabilitiesErrorDetail] = useState<
     string | null
   >(null);
+  const [isRefreshingCapabilities, setIsRefreshingCapabilities] =
+    useState(false);
+  const modelFetchInFlightRef = useRef(false);
+  const capabilityFetchInFlightRef = useRef(false);
   const [browserActionsEnabled, setBrowserActionsEnabled] = useState(true);
   const [clickApproval, setClickApproval] = useState<{
     origin: string;
@@ -472,6 +496,7 @@ export default function App() {
     chrome.storage.local.get(
       [
         "llmSettings",
+        CLI_PROVIDER_SETTINGS_KEY,
         "browserActionsEnabled",
         "fileOperationsEnabled",
         "language",
@@ -488,6 +513,7 @@ export default function App() {
       ],
       (result: {
         llmSettings?: LLMSettings;
+        cliProviderSelectionV1?: unknown;
         browserActionsEnabled?: boolean;
         fileOperationsEnabled?: boolean;
         language?: Language;
@@ -511,7 +537,14 @@ export default function App() {
           ? result.language
           : language;
 
-        if (isValidLlmSettings(result.llmSettings)) {
+        if (isValidLlmSettings(result.cliProviderSelectionV1)) {
+          const cliSettings = normalizeLoadedLlmSettings(
+            result.cliProviderSelectionV1,
+          );
+          if (isExplicitCliProvider(cliSettings.provider)) {
+            setSettings(cliSettings);
+          }
+        } else if (isValidLlmSettings(result.llmSettings)) {
           setSettings(normalizeLoadedLlmSettings(result.llmSettings));
         }
         if (result.browserActionsEnabled !== undefined) {
@@ -631,8 +664,12 @@ export default function App() {
       return;
     }
 
+    const cliProviderSelected = isExplicitCliProvider(settings.provider);
     chrome.storage.local.set({
-      llmSettings: settings,
+      llmSettings: cliProviderSelected
+        ? { ...settings, provider: "auto" }
+        : settings,
+      [CLI_PROVIDER_SETTINGS_KEY]: cliProviderSelected ? settings : null,
       browserActionsEnabled,
       fileOperationsEnabled,
       language,
@@ -730,6 +767,9 @@ export default function App() {
   };
 
   const fetchAvailableModels = async (overridePort?: number) => {
+    if (modelFetchInFlightRef.current) return;
+    modelFetchInFlightRef.current = true;
+    setIsFetchingModels(true);
     try {
       const result = await fetchModelsWithRetry({
         baseUrl: getBridgeBaseUrl(overridePort),
@@ -776,10 +816,16 @@ export default function App() {
         error instanceof Error ? error.message : String(error),
       );
       console.error("Failed to fetch models");
+    } finally {
+      modelFetchInFlightRef.current = false;
+      setIsFetchingModels(false);
     }
   };
 
   const fetchBridgeCapabilities = async (overridePort?: number) => {
+    if (capabilityFetchInFlightRef.current) return;
+    capabilityFetchInFlightRef.current = true;
+    setIsRefreshingCapabilities(true);
     try {
       const response = await fetch(
         `${getBridgeBaseUrl(overridePort)}/capabilities`,
@@ -810,6 +856,9 @@ export default function App() {
       setCapabilitiesErrorDetail(
         error instanceof Error ? error.message : String(error),
       );
+    } finally {
+      capabilityFetchInFlightRef.current = false;
+      setIsRefreshingCapabilities(false);
     }
   };
 
@@ -3093,8 +3142,10 @@ export default function App() {
           onClose={closeSettings}
           isConnected={isConnected}
           availableModels={availableModels}
+          modelFetching={isFetchingModels}
           modelFetchFailed={modelFetchFailed}
           bridgeCapabilities={bridgeCapabilities}
+          capabilitiesRefreshing={isRefreshingCapabilities}
           capabilitiesErrorDetail={capabilitiesErrorDetail}
           onRefreshCapabilities={() => {
             void fetchBridgeCapabilities();

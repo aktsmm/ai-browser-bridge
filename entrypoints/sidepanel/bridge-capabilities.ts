@@ -4,6 +4,8 @@ const PROVIDER_IDS = new Set<BridgeProviderCapability["id"]>([
   "vscode-lm",
   "copilot-sdk",
   "copilot-cli",
+  "codex-cli",
+  "claude-code",
   "lm-studio",
 ]);
 const PROVIDER_STATUSES = new Set<BridgeProviderCapability["status"]>([
@@ -27,6 +29,21 @@ function isProviderCapability(
     return false;
   }
 
+  const connectionsValid =
+    value.connections === undefined ||
+    (isRecord(value.connections) &&
+      Object.entries(value.connections).every(
+        ([connection, capability]) =>
+          (connection === "direct" || connection === "gateway") &&
+          isRecord(capability) &&
+          typeof capability.status === "string" &&
+          PROVIDER_STATUSES.has(
+            capability.status as BridgeProviderCapability["status"],
+          ) &&
+          (capability.detail === undefined ||
+            typeof capability.detail === "string"),
+      ));
+
   return (
     typeof value.id === "string" &&
     PROVIDER_IDS.has(value.id as BridgeProviderCapability["id"]) &&
@@ -49,7 +66,8 @@ function isProviderCapability(
     (value.isExperimental === undefined ||
       typeof value.isExperimental === "boolean") &&
     (value.userSelectable === undefined ||
-      typeof value.userSelectable === "boolean")
+      typeof value.userSelectable === "boolean") &&
+    connectionsValid
   );
 }
 

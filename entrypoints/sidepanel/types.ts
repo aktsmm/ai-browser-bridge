@@ -8,12 +8,19 @@ export interface LLMSettings {
     | "copilot-agent"
     | "copilot-sdk"
     | "copilot-cli"
+    | "codex-cli"
+    | "claude-code"
     | "lm-studio";
   copilot: {
     model: string;
   };
   lmStudio: {
     endpoint: string;
+    model: string;
+  };
+  codexCli: { model: string };
+  claudeCode: {
+    connection: "direct" | "gateway";
     model: string;
   };
 }
@@ -69,7 +76,13 @@ export interface ModelInfo {
 }
 
 export interface BridgeProviderCapability {
-  id: "vscode-lm" | "copilot-sdk" | "copilot-cli" | "lm-studio";
+  id:
+    | "vscode-lm"
+    | "copilot-sdk"
+    | "copilot-cli"
+    | "codex-cli"
+    | "claude-code"
+    | "lm-studio";
   name: string;
   status: "available" | "unavailable" | "unknown";
   detail?: string;
@@ -82,6 +95,15 @@ export interface BridgeProviderCapability {
   isExperimental?: boolean;
   userSelectable?: boolean;
   models?: ModelInfo[];
+  connections?: Partial<
+    Record<
+      "direct" | "gateway",
+      {
+        status: "available" | "unavailable" | "unknown";
+        detail?: string;
+      }
+    >
+  >;
 }
 
 export interface BridgeCapabilities {

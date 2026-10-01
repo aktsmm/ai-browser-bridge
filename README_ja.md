@@ -37,7 +37,7 @@
 
 `npm run build` 後、`npm run test:installed` で専用の表示Chromiumに実拡張を読み込めます。導入済みPlaywrightとChromiumが必要です。モジュールが見つからない場合は `--playwright-module` で指定します。PowerShellでワークスペースの既存環境を使う実行例は `npm.cmd run test:installed -- --playwright-module=../../split-shortcut/node_modules/playwright/index.mjs` です。`npm.cmd` と値付きオプションで引数の欠落を防ぎます。
 
-Chrome APIはモックせず、ストレージ、タブ・ドキュメント指定、iframe／Shadow DOM取得、フォーム入力の読み戻し、未送信、ボタンの初回許可とサイドパネル再読み込み後の無確認クリック、キーボードキャンセルと許可解除、同一サイトのテスト用PDFの保存とChromeダウンロード管理による完了確認、表示テキスト2要素の一括置換とまとめてUndo、バックグラウンドからの実ダウンロードと保存本文を確認します。Playwright が一時ファイル名を管理するため、テスト画面の汎用的なダウンロード名やアイコンは通常プロファイルの挙動を示しません。接続情報を遅らせた起動キュー保持、別のHTTPサイトもサイト別の許可操作なしで読めること、表示編集前の本文送信も検証します。通常ブラウザには接続せず、一時プロファイル・ダウンロードは終了時に削除します。画面証跡は既定で `.output/installed-extension-evidence` に保存し、`--output-dir` で変更できます。
+Chrome APIはモックせず、ストレージ、タブ・ドキュメント指定、iframe／Shadow DOM取得、フォーム入力の読み戻し、未送信、ボタンの初回許可とサイドパネル再読み込み後の無確認クリック、キーボードキャンセルと許可解除、同一サイトのテスト用PDFの保存とChromeダウンロード管理による完了確認、バックグラウンドからの実ダウンロードと保存本文を確認します。表示編集は、現在のcapabilityとopaque handle protocolを交渉する `--display-only` だけで検証し、通常fixtureでは旧numeric refによる表示編集を扱いません。Playwright が一時ファイル名を管理するため、テスト画面の汎用的なダウンロード名やアイコンは通常プロファイルの挙動を示しません。接続情報を遅らせた起動キュー保持と、別のHTTPサイトもサイト別の許可操作なしで読めることも検証します。通常ブラウザには接続せず、一時プロファイル・ダウンロードは終了時に削除します。画面証跡は既定で `.output/installed-extension-evidence` に保存し、`--output-dir` で変更できます。
 
 モデル応答はローカルfixtureです。また、実拡張ページを専用タブで開くため、Chromeのネイティブサイドパネルそのもの、権限の承認・撤回、実モデルとの接続、通常プロファイルへのCLI接続は未検証です。権限ダイアログは自動承認しません。
 
@@ -120,11 +120,15 @@ standaloneのSDK経路は空のモデル指定をSDK defaultとして受け付�
 
 サイドパネルの設定ボタンから以下を設定可能:
 
-- **プロバイダー**: Auto / GitHub Copilot via VS Code / LM Studio
+- **プロバイダー**: Auto / GitHub Copilot via VS Code / OpenAI Codex CLI / Claude Code / LM Studio
   - Auto は VS Code bridge 利用時に VS Code Language Model API を優先します。GitHub Copilot CLI は最後の回答 fallback としてのみ使います
-  - GitHub Copilot SDK / CLI は通常の provider 選択ではなく、Bridge 状態の診断または advanced fallback として表示します
+  - OpenAI Codex CLI と Claude Code は明示選択時だけ実行され、Auto fallback には入りません
+  - Claude Code は通常の `claude` と `GW` 経由を選択できます。GWでは選択したbackendの利用枠、directではClaude Code側の認証・課金設定が使われます
+  - Bridge 状態はDirectの認証とGWの導入状態を経路別に確認します。既知の利用不可経路だけを無効化し、サインインや修復後は **更新** で再確認できます
+  - 新CLI経路は一時作業フォルダーで起動し、組込みtools・MCP・Chrome連携を無効化します。モデル名は任意で、空欄ならCLI既定を使います
+  - GitHub Copilot SDK / CLI はBridge状態の診断またはadvanced fallbackとして表示します
   - 設定画面の **Auto 経路** で、現在の動作モードに応じた provider 順序と状態を確認できます
-- **Bridge 状態**: local bridge version と各 provider（VS Code LM / Copilot SDK / Copilot CLI / LM Studio）の利用状態を確認できます
+- **Bridge 状態**: local bridge version と各 provider（VS Code LM / Copilot SDK / Copilot CLI / Codex CLI / Claude Code / LM Studio）の利用状態を確認できます
 - **モデル選択**: bridge から実際に返った user-visible な Copilot モデルだけを表示します。live list が取得できない時は固定 fallback model を選択可能にしません
 - **ブラウザ操作**: サイドパネルからの自動ブラウザ操作を許可/無効化できます
 - **ファイル操作**: bridge 経由の生成ファイル保存を許可/無効化できます

@@ -28,6 +28,29 @@ describe("parseBridgeCapabilities", () => {
           isExperimental: true,
           userSelectable: false,
         },
+        {
+          id: "codex-cli",
+          name: "OpenAI Codex CLI",
+          status: "available",
+          supportsChat: true,
+          supportsAgentLoop: true,
+          supportsBrowserActions: true,
+          userSelectable: true,
+        },
+        {
+          id: "claude-code",
+          name: "Claude Code",
+          status: "available",
+          supportsChat: true,
+          userSelectable: true,
+          connections: {
+            direct: {
+              status: "unavailable",
+              detail: "Claude Code is not signed in.",
+            },
+            gateway: { status: "available" },
+          },
+        },
       ],
     });
 
@@ -35,6 +58,19 @@ describe("parseBridgeCapabilities", () => {
     expect(parsed?.contextVersion).toBe(1);
     expect(parsed?.displayTextLookupVersion).toBe(1);
     expect(parsed?.browserBackend).toBe("extension-dom");
+    expect(parsed?.providers.map((provider) => provider.id)).toContain(
+      "codex-cli",
+    );
+    expect(parsed?.providers.map((provider) => provider.id)).toContain(
+      "claude-code",
+    );
+    expect(
+      parsed?.providers.find((provider) => provider.id === "claude-code")
+        ?.connections?.direct,
+    ).toEqual({
+      status: "unavailable",
+      detail: "Claude Code is not signed in.",
+    });
   });
 
   it("rejects malformed provider payloads instead of crashing Settings", () => {

@@ -17,6 +17,8 @@ function buildSettings(provider: LLMSettings["provider"]): LLMSettings {
     provider,
     copilot: { model: "gpt-4o" },
     lmStudio: { endpoint: "http://localhost:1234", model: "" },
+    codexCli: { model: "" },
+    claudeCode: { connection: "gateway", model: "" },
   };
 }
 
@@ -26,6 +28,8 @@ function renderSettings(options?: {
   isConnected?: boolean;
   availableModels?: Array<{ provider: string; id: string; name: string }>;
   modelFetchFailed?: boolean;
+  modelFetching?: boolean;
+  capabilitiesRefreshing?: boolean;
   capabilities?: BridgeCapabilities | null;
   capabilitiesErrorDetail?: string | null;
   language?: "ja" | "en";
@@ -47,8 +51,10 @@ function renderSettings(options?: {
           { provider: "copilot", id: "gpt-4o", name: "GPT-4o" },
         ]
       }
+      modelFetching={options?.modelFetching ?? false}
       modelFetchFailed={options?.modelFetchFailed ?? false}
       bridgeCapabilities={options?.capabilities ?? null}
+      capabilitiesRefreshing={options?.capabilitiesRefreshing ?? false}
       capabilitiesErrorDetail={options?.capabilitiesErrorDetail ?? null}
       onRefreshCapabilities={noop}
       onRefreshModels={noop}
@@ -190,7 +196,7 @@ describe("Settings provider UI", () => {
     expect(html).not.toContain('id="evaluate-action-hint"');
     expect(html).toContain("Automatic file saving is unavailable in this mode");
   });
-  it("renders primary provider choices and keeps SDK/CLI out of normal selection", () => {
+  it("renders explicit CLI provider choices while keeping fallback-only routes hidden", () => {
     const html = renderSettings();
 
     expect(html).toContain("Auto (Recommended)");
@@ -200,10 +206,109 @@ describe("Settings provider UI", () => {
     expect(html).not.toContain("GitHub Copilot via VS Code (Chat)");
     expect(html).not.toContain("GitHub Copilot via VS Code (Agent)");
     expect(html).toContain("LM Studio");
-    expect(html).toContain(
-      "SDK and CLI are shown in bridge status as diagnostic/fallback routes",
-    );
+    expect(html).toContain("OpenAI Codex CLI");
+    expect(html).toContain("Claude Code");
+    expect(html).toContain("run only when explicitly selected");
     expect(html).not.toContain("GitHub Copilot SDK (Agent)");
+  });
+
+  it("shows Codex and Claude provider-specific controls", () => {
+    const codex = renderSettings({ provider: "codex-cli" });
+    expect(codex).toContain("Codex model (optional)");
+    expect(codex).toContain("Leave blank for CLI default");
+
+    const claude = renderSettings({ provider: "claude-code" });
+    expect(claude).toContain("Connection");
+    expect(claude).toContain("Direct");
+    expect(claude).toContain("GW");
+    expect(claude).toContain("copilot/claude-opus-5");
+  });
+
+  it("disables only the unavailable Claude connection and explains recovery", () => {
+    const html = renderSettings({
+      provider: "claude-code",
+      capabilities: {
+        version: "test",
+        bridge: "standalone",
+        recommended: { chat: "vscode-lm", agent: "vscode-lm" },
+        providers: [
+          { id: "vscode-lm", name: "VS Code", status: "available" },
+          {
+            id: "claude-code",
+            name: "Claude Code",
+            status: "available",
+            connections: {
+              direct: {
+                status: "unavailable",
+                detail: "Sign in with Claude Code, then refresh.",
+              },
+              gateway: { status: "available" },
+            },
+          },
+        ],
+      },
+    });
+
+    const connectionInputs = html.match(
+      /<input[^>]*name="claude-connection"[^>]*>/g,
+    );
+    expect(connectionInputs).toHaveLength(2);
+    expect(connectionInputs?.[0]).toContain('disabled=""');
+    expect(connectionInputs?.[0]).not.toContain('checked=""');
+    expect(connectionInputs?.[1]).not.toContain('disabled=""');
+    expect(connectionInputs?.[1]).toContain('checked=""');
+    expect(html).toContain("Sign in with Claude Code, then refresh.");
+    expect(html).toContain(">available</span>");
+  });
+
+  it("keeps legacy bridge routes selectable but marks their status unknown", () => {
+    const html = renderSettings({
+      provider: "claude-code",
+      capabilities: {
+        version: "legacy",
+        bridge: "standalone",
+        recommended: { chat: "vscode-lm", agent: "vscode-lm" },
+        providers: [
+          { id: "vscode-lm", name: "VS Code", status: "available" },
+          { id: "claude-code", name: "Claude Code", status: "available" },
+        ],
+      },
+    });
+    const connectionInputs = html.match(
+      /<input[^>]*name="claude-connection"[^>]*>/g,
+    );
+    expect(connectionInputs).toHaveLength(2);
+    expect(connectionInputs?.every((input) => !input.includes("disabled"))).toBe(
+      true,
+    );
+    expect(html).toContain("Connection status is unavailable");
+    expect(html).toContain(">unknown</span>");
+  });
+
+  it("shows a recovery alert when both Claude connections are unavailable", () => {
+    const html = renderSettings({
+      provider: "claude-code",
+      capabilities: {
+        version: "test",
+        bridge: "standalone",
+        recommended: { chat: "vscode-lm", agent: "vscode-lm" },
+        providers: [
+          { id: "vscode-lm", name: "VS Code", status: "available" },
+          {
+            id: "claude-code",
+            name: "Claude Code",
+            status: "unavailable",
+            connections: {
+              direct: { status: "unavailable" },
+              gateway: { status: "unavailable" },
+            },
+          },
+        ],
+      },
+    });
+    expect(html).toContain('role="alert"');
+    expect(html).toContain("Claude Code connections are unavailable");
+    expect(html).toContain("select another provider above");
   });
 
   it("localizes Auto label and shows unchecked Auto route status", () => {
@@ -298,7 +403,7 @@ describe("Settings provider UI", () => {
     expect(html).toContain("利用可能な bridge provider を自動選択");
     expect(html).toContain("Experimental / advanced fallback");
     expect(html).toContain(
-      "通常は Auto を使ってください。SDK / CLI は bridge 状態の診断と fallback 用に表示され、通常の provider としては選択しません。",
+      "Auto は既存経路だけを使います。Codex CLI と Claude Code は選択したときだけ実行します。",
     );
     expect(html).toContain("利用可能");
     expect(html).toContain("利用不可");
@@ -366,10 +471,28 @@ describe("Settings provider UI", () => {
     ).toContain("Capabilities request failed (401 Unauthorized)");
   });
 
+  it("shows refresh progress and disables duplicate refresh actions", () => {
+    const html = renderSettings({
+      modelFetching: true,
+      capabilitiesRefreshing: true,
+    });
+    expect(html.match(/aria-busy="true"/g)).toHaveLength(2);
+    expect(html.match(/Refreshing\.\.\./g)).toHaveLength(2);
+    expect(html.match(/<button[^>]*disabled=""/g)).toHaveLength(2);
+
+    const claude = renderSettings({
+      provider: "claude-code",
+      capabilitiesRefreshing: true,
+    });
+    expect(claude).toContain('<fieldset aria-busy="true">');
+  });
+
   it("hides the Copilot model selector for the explicit CLI provider", () => {
     const html = renderSettings({ provider: "copilot-cli" });
 
-    expect(html).toContain("SDK and CLI are shown in bridge status");
+    expect(html).toContain(
+      "Codex CLI and Claude Code run only when explicitly selected",
+    );
     expect(html).not.toContain('aria-label="Model selection"');
   });
 

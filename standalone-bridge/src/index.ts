@@ -9,12 +9,20 @@ import {
   isChatContext,
   type ChatContext,
 } from "./chat-context.js";
+import {
+  CliProviderClient,
+  validateCliModelId,
+  type ClaudeConnection,
+  type CliProviderSettings,
+} from "./cli-providers.js";
 export type Provider =
   | "auto"
   | "copilot"
   | "copilot-agent"
   | "copilot-sdk"
   | "copilot-cli"
+  | "codex-cli"
+  | "claude-code"
   | "lm-studio";
 type Message = { role: "user" | "assistant" | "system"; content: string };
 type Attachment = {
@@ -32,6 +40,8 @@ type ChatRequest = {
   settings: {
     provider: Provider;
     copilot: { model: string };
+    codexCli?: { model: string };
+    claudeCode?: { connection: ClaudeConnection; model: string };
     lmStudio: { endpoint: string; model: string };
   };
   messages: Message[];
@@ -40,7 +50,13 @@ type ChatRequest = {
   attachments?: Attachment[];
 };
 type Capability = {
-  id: "vscode-lm" | "copilot-sdk" | "copilot-cli" | "lm-studio";
+  id:
+    | "vscode-lm"
+    | "copilot-sdk"
+    | "copilot-cli"
+    | "codex-cli"
+    | "claude-code"
+    | "lm-studio";
   name: string;
   status: "available" | "unavailable" | "unknown";
   detail?: string;
@@ -52,10 +68,20 @@ type Capability = {
   supportsVision?: boolean;
   isExperimental?: boolean;
   userSelectable?: boolean;
+  connections?: Partial<
+    Record<
+      "direct" | "gateway",
+      {
+        status: "available" | "unavailable" | "unknown";
+        detail?: string;
+      }
+    >
+  >;
 };
 type ValidationResult<T> =
   | { ok: true; value: T }
   | { ok: false; error: string };
+type CliProviderExecutor = Pick<CliProviderClient, "isAvailable" | "runPrompt">;
 const DEFAULT_ALLOWED_EXTENSION_ORIGINS = [
   "chrome-extension://nggfpdadfepkbpjfnpcihagbnnfpeian",
 ];
@@ -93,6 +119,9 @@ const PLAYWRIGHT_MCP_TOOL_MAP = {
 function json(res: http.ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "Content-Type": "application/json" });
   res.end(JSON.stringify(body));
+}
+function assertNever(value: never): never {
+  throw new Error(`Unsupported provider: ${String(value)}`);
 }
 function normalizeAllowedOrigins(values: string[]): string[] {
   return values
@@ -354,11 +383,17 @@ function validateChatRequest(
     "copilot-agent",
     "copilot-sdk",
     "copilot-cli",
+    "codex-cli",
+    "claude-code",
     "lm-studio",
   ];
   if (typeof provider !== "string" || !allowedProviders.includes(provider))
     return { ok: false, error: "Invalid provider" };
-  if (provider !== "lm-studio") {
+  if (
+    provider !== "lm-studio" &&
+    provider !== "codex-cli" &&
+    provider !== "claude-code"
+  ) {
     const copilot = settings.copilot as Record<string, unknown> | undefined;
     if (
       !copilot ||
@@ -366,6 +401,35 @@ function validateChatRequest(
       (!copilot.model.trim() && provider !== "copilot-sdk")
     )
       return { ok: false, error: "Invalid copilot settings" };
+  }
+  const codexCli = settings.codexCli as Record<string, unknown> | undefined;
+  if (provider === "codex-cli" && !codexCli)
+    return { ok: false, error: "Invalid codexCli settings" };
+  if (codexCli !== undefined) {
+    if (typeof codexCli !== "object" || typeof codexCli.model !== "string")
+      return { ok: false, error: "Invalid codexCli settings" };
+    try {
+      validateCliModelId(codexCli.model);
+    } catch {
+      return { ok: false, error: "Invalid codexCli settings" };
+    }
+  }
+  const claudeCode = settings.claudeCode as Record<string, unknown> | undefined;
+  if (provider === "claude-code" && !claudeCode)
+    return { ok: false, error: "Invalid claudeCode settings" };
+  if (claudeCode !== undefined) {
+    if (
+      typeof claudeCode !== "object" ||
+      (claudeCode.connection !== "direct" &&
+        claudeCode.connection !== "gateway") ||
+      typeof claudeCode.model !== "string"
+    )
+      return { ok: false, error: "Invalid claudeCode settings" };
+    try {
+      validateCliModelId(claudeCode.model);
+    } catch {
+      return { ok: false, error: "Invalid claudeCode settings" };
+    }
   }
   if (provider === "lm-studio") {
     const lmStudio = settings.lmStudio as Record<string, unknown> | undefined;
@@ -695,6 +759,7 @@ export class StandaloneBridgeServer {
     private workspaceRoot: string,
     private allowedOrigins: string[],
     private playwrightMcpEndpoint = DEFAULT_PLAYWRIGHT_MCP_ENDPOINT,
+    private cliProviders: CliProviderExecutor = new CliProviderClient(),
   ) {}
   start(): Promise<void> {
     if (this.server) return this.startPromise ?? Promise.resolve();
@@ -796,11 +861,21 @@ export class StandaloneBridgeServer {
     return json(res, 404, { error: "Not found" });
   }
   private async models() {
-    return [{ provider: "lm-studio", id: "local", name: "LM Studio (Local)" }];
+    return [
+      { provider: "codex-cli", id: "configured", name: "Codex CLI" },
+      { provider: "claude-code", id: "configured", name: "Claude Code" },
+      { provider: "lm-studio", id: "local", name: "LM Studio (Local)" },
+    ];
   }
   private async capabilities(): Promise<Capability[]> {
     const sdk = await isSdkAvailable();
     const cli = await isCliAvailable();
+    const [codexCli, claudeDirect, claudeGateway] = await Promise.all([
+      this.cliProviders.isAvailable("codex-cli", "direct", true),
+      this.cliProviders.isAvailable("claude-code", "direct", true),
+      this.cliProviders.isAvailable("claude-code", "gateway", true),
+    ]);
+    const claudeCode = claudeDirect || claudeGateway;
     return [
       {
         id: "vscode-lm",
@@ -842,6 +917,48 @@ export class StandaloneBridgeServer {
         detail: cli
           ? "CLI is available as a last-resort answer fallback only."
           : "Copilot CLI command was not available to the standalone bridge process.",
+      },
+      {
+        id: "codex-cli",
+        name: "Codex CLI",
+        status: codexCli ? "available" : "unavailable",
+        supportsChat: codexCli,
+        supportsAgentLoop: codexCli,
+        supportsBrowserActions: codexCli,
+        supportsModelList: false,
+        supportsVision: false,
+        userSelectable: true,
+        detail: codexCli
+          ? "Codex CLI is available in read-only ephemeral mode."
+          : "Codex CLI command was not available to the standalone bridge process.",
+      },
+      {
+        id: "claude-code",
+        name: "Claude Code",
+        status: claudeCode ? "available" : "unavailable",
+        supportsChat: claudeCode,
+        supportsAgentLoop: claudeCode,
+        supportsBrowserActions: claudeCode,
+        supportsModelList: false,
+        supportsVision: false,
+        userSelectable: true,
+        detail: claudeCode
+          ? `Claude Code is available with tools and MCP disabled. Direct: ${claudeDirect ? "authenticated" : "sign-in required"}; GW: ${claudeGateway ? "installed" : "unavailable"}.`
+          : "Claude Code command was not available to the standalone bridge process.",
+        connections: {
+          direct: {
+            status: claudeDirect ? "available" : "unavailable",
+            detail: claudeDirect
+              ? "Claude Code authentication is ready."
+              : "Sign in with Claude Code, then refresh Bridge status.",
+          },
+          gateway: {
+            status: claudeGateway ? "available" : "unavailable",
+            detail: claudeGateway
+              ? "GW is installed; its configured backend is used."
+              : "Install or repair GW, then refresh Bridge status.",
+          },
+        },
       },
       {
         id: "lm-studio",
@@ -1179,56 +1296,77 @@ export class StandaloneBridgeServer {
       agent,
       request.context,
     );
-    if (
-      request.settings.provider === "copilot" ||
-      request.settings.provider === "copilot-agent"
-    ) {
-      yield "エラー: この provider は VS Code bridge 専用です。standalone bridge では Auto / GitHub Copilot SDK / GitHub Copilot CLI / LM Studio を選択してください。";
-      return;
+    const prompt = buildPrompt(
+      system,
+      request.messages,
+      agent ? "agent" : "chat",
+      request.attachments,
+    );
+    switch (request.settings.provider) {
+      case "copilot":
+      case "copilot-agent":
+        yield "エラー: この provider は VS Code bridge 専用です。standalone bridge では Auto / GitHub Copilot SDK / GitHub Copilot CLI / Codex CLI / Claude Code / LM Studio を選択してください。";
+        return;
+      case "lm-studio":
+        yield await chatWithLMStudio(request, system, signal);
+        return;
+      case "copilot-cli":
+        yield await runCliPrompt(prompt, signal);
+        return;
+      case "codex-cli":
+        yield await this.runExplicitCliProvider(
+          {
+            provider: "codex-cli",
+            model: request.settings.codexCli!.model,
+          },
+          prompt,
+          signal,
+        );
+        return;
+      case "claude-code":
+        yield await this.runExplicitCliProvider(
+          {
+            provider: "claude-code",
+            connection: request.settings.claudeCode!.connection,
+            model: request.settings.claudeCode!.model,
+          },
+          prompt,
+          signal,
+        );
+        return;
+      case "copilot-sdk":
+        yield await runSdkPrompt(
+          prompt,
+          request.settings.copilot.model,
+          this.workspaceRoot,
+          signal,
+        );
+        return;
+      case "auto":
+        try {
+          yield await runSdkPrompt(
+            prompt,
+            request.settings.copilot.model,
+            this.workspaceRoot,
+            signal,
+          );
+        } catch (error) {
+          console.warn(
+            `Auto provider copilot-sdk unavailable: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          yield await runCliPrompt(prompt, signal);
+        }
+        return;
+      default:
+        return assertNever(request.settings.provider);
     }
-    if (request.settings.provider === "lm-studio") {
-      yield await chatWithLMStudio(request, system, signal);
-      return;
-    }
-    if (request.settings.provider === "copilot-cli") {
-      yield await runCliPrompt(
-        buildPrompt(
-          system,
-          request.messages,
-          agent ? "agent" : "chat",
-          request.attachments,
-        ),
-        signal,
-      );
-      return;
-    }
-    try {
-      yield await runSdkPrompt(
-        buildPrompt(
-          system,
-          request.messages,
-          agent ? "agent" : "chat",
-          request.attachments,
-        ),
-        request.settings.copilot.model,
-        this.workspaceRoot,
-        signal,
-      );
-    } catch (error) {
-      if (request.settings.provider !== "auto") throw error;
-      console.warn(
-        `Auto provider copilot-sdk unavailable: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      yield await runCliPrompt(
-        buildPrompt(
-          system,
-          request.messages,
-          agent ? "agent" : "chat",
-          request.attachments,
-        ),
-        signal,
-      );
-    }
+  }
+  private runExplicitCliProvider(
+    settings: CliProviderSettings,
+    prompt: string,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    return this.cliProviders.runPrompt(settings, prompt, signal);
   }
   private async handleFile(
     req: http.IncomingMessage,

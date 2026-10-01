@@ -19,6 +19,44 @@ const sdkProbe = vi.hoisted(() => ({
   aborted: false,
   release: undefined as (() => void) | undefined,
 }));
+const cliProbe = {
+  availabilityCalls: [] as Array<{
+    provider: "codex-cli" | "claude-code";
+    connection?: "direct" | "gateway";
+    forceRefresh?: boolean;
+  }>,
+  calls: [] as Array<{
+    settings: {
+      provider: "codex-cli" | "claude-code";
+      model: string;
+      connection?: "direct" | "gateway";
+    };
+    prompt: string;
+  }>,
+  async isAvailable(
+    provider: "codex-cli" | "claude-code",
+    connection?: "direct" | "gateway",
+    forceRefresh?: boolean,
+  ) {
+    cliProbe.availabilityCalls.push({
+      provider,
+      connection,
+      forceRefresh,
+    });
+    return provider === "codex-cli" || connection === "gateway";
+  },
+  async runPrompt(
+    settings: {
+      provider: "codex-cli" | "claude-code";
+      model: string;
+      connection?: "direct" | "gateway";
+    },
+    prompt: string,
+  ) {
+    cliProbe.calls.push({ settings, prompt });
+    return `Synthetic ${settings.provider} reply`;
+  },
+};
 vi.mock("@github/copilot-sdk", () => ({
   CopilotClient: class {
     async createSession() {
@@ -129,11 +167,19 @@ describe("standalone bridge server", () => {
     sdkProbe.started = false;
     sdkProbe.aborted = false;
     sdkProbe.release = undefined;
+    cliProbe.calls = [];
     workspaceRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "bridge-standalone-"),
     );
     const port = await getFreePort();
-    server = new StandaloneBridgeServer(port, "test", workspaceRoot, []);
+    server = new StandaloneBridgeServer(
+      port,
+      "test",
+      workspaceRoot,
+      [],
+      undefined,
+      cliProbe,
+    );
     await server.start();
     baseUrl = `http://127.0.0.1:${port}`;
   });
@@ -312,6 +358,8 @@ describe("standalone bridge server", () => {
       "vscode-lm",
       "copilot-sdk",
       "copilot-cli",
+      "codex-cli",
+      "claude-code",
       "lm-studio",
     ]);
     expect(body.providers).toContainEqual(
@@ -329,6 +377,121 @@ describe("standalone bridge server", () => {
       }),
     );
   });
+  it.each([
+    { provider: "codex-cli", settings: {} },
+    { provider: "claude-code", settings: {} },
+    {
+      provider: "claude-code",
+      settings: { claudeCode: { connection: "invalid", model: "claude" } },
+    },
+  ])("rejects invalid $provider settings", async ({ provider, settings }) => {
+    const response = await fetch(`${baseUrl}/chat`, {
+      method: "POST",
+      headers: { ...TRUSTED_HEADERS, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        settings: { provider, ...settings },
+        pageContent: "Synthetic page",
+        messages: [{ role: "user", content: "Synthetic request" }],
+      }),
+    });
+    expect(response.status).toBe(400);
+    expect(sdkProbe.started).toBe(false);
+    expect(cliProbe.calls).toHaveLength(0);
+  });
+  it("rejects an unknown provider without entering SDK fallback", async () => {
+    const response = await fetch(`${baseUrl}/chat`, {
+      method: "POST",
+      headers: { ...TRUSTED_HEADERS, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        settings: { provider: "unknown-provider" },
+        pageContent: "Synthetic page",
+        messages: [{ role: "user", content: "Synthetic request" }],
+      }),
+    });
+    expect(response.status).toBe(400);
+    expect(sdkProbe.started).toBe(false);
+    expect(cliProbe.calls).toHaveLength(0);
+  });
+  it("keeps a VS Code-only provider out of SDK fallback", async () => {
+    const response = await fetch(`${baseUrl}/chat`, {
+      method: "POST",
+      headers: { ...TRUSTED_HEADERS, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        settings: { provider: "copilot", copilot: { model: "synthetic" } },
+        pageContent: "Synthetic page",
+        messages: [{ role: "user", content: "Synthetic request" }],
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("VS Code bridge");
+    expect(sdkProbe.started).toBe(false);
+    expect(cliProbe.calls).toHaveLength(0);
+  });
+  it("reports Claude Direct and GW availability without swapping routes", async () => {
+    cliProbe.availabilityCalls.length = 0;
+    const response = await fetch(`${baseUrl}/capabilities`, {
+      headers: TRUSTED_HEADERS,
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      providers: Array<{
+        id: string;
+        connections?: {
+          direct?: { status: string };
+          gateway?: { status: string };
+        };
+      }>;
+    };
+    const claude = body.providers.find(
+      (provider) => provider.id === "claude-code",
+    );
+    expect(claude?.connections?.direct?.status).toBe("unavailable");
+    expect(claude?.connections?.gateway?.status).toBe("available");
+    expect(cliProbe.availabilityCalls).toEqual([
+      { provider: "codex-cli", connection: "direct", forceRefresh: true },
+      { provider: "claude-code", connection: "direct", forceRefresh: true },
+      { provider: "claude-code", connection: "gateway", forceRefresh: true },
+    ]);
+  });
+  it.each([
+    {
+      provider: "codex-cli",
+      providerSettings: { codexCli: { model: "gpt-5.4" } },
+      expected: {
+        provider: "codex-cli",
+        model: "gpt-5.4",
+      },
+    },
+    {
+      provider: "claude-code",
+      providerSettings: {
+        claudeCode: { connection: "gateway", model: "copilot/claude-opus-5" },
+      },
+      expected: {
+        provider: "claude-code",
+        connection: "gateway",
+        model: "copilot/claude-opus-5",
+      },
+    },
+  ])(
+    "dispatches $provider explicitly without entering Auto fallback",
+    async ({ provider, providerSettings, expected }) => {
+      const response = await fetch(`${baseUrl}/chat`, {
+        method: "POST",
+        headers: { ...TRUSTED_HEADERS, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          settings: { provider, ...providerSettings },
+          pageContent: "Synthetic page",
+          messages: [{ role: "user", content: "Synthetic request" }],
+        }),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe(`Synthetic ${provider} reply`);
+      expect(cliProbe.calls).toHaveLength(1);
+      expect(cliProbe.calls[0].settings).toEqual(expected);
+      expect(sdkProbe.started).toBe(false);
+    },
+  );
   it("supports workspace-relative file creation", async () => {
     const response = await fetch(`${baseUrl}/file`, {
       method: "POST",

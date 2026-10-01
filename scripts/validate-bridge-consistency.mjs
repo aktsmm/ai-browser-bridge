@@ -226,6 +226,8 @@ async function main() {
     "copilot-agent",
     "copilot-sdk",
     "copilot-cli",
+    "codex-cli",
+    "claude-code",
     "lm-studio",
   ];
   for (const providerId of providerIds) {
@@ -238,7 +240,13 @@ async function main() {
     }
   }
 
-  const settingsProviders = ["auto", "copilot-agent", "lm-studio"];
+  const settingsProviders = [
+    "auto",
+    "copilot-agent",
+    "codex-cli",
+    "claude-code",
+    "lm-studio",
+  ];
   for (const providerId of settingsProviders) {
     if (!chromeSettingsSource.includes(`provider: "${providerId}"`)) {
       failures.push(`Settings.tsx must expose provider ${providerId}`);
@@ -259,13 +267,29 @@ async function main() {
     }
   }
 
-  if (
-    !vscodeLlmRouterSource.includes("userSelectable: false") ||
-    !chromeSettingsSource.includes("SDK and CLI are shown in bridge status")
-  ) {
+  if (!vscodeLlmRouterSource.includes("userSelectable: false")) {
     failures.push(
-      "SDK/CLI must stay out of normal provider selection and remain diagnostics/fallback routes",
+      "Copilot SDK/CLI fallback capabilities must remain hidden from normal provider selection",
     );
+  }
+
+  const compactRouterSource = vscodeLlmRouterSource.replace(/\s+/g, "");
+  for (const expectedProbe of [
+    'isAvailable("codex-cli","direct",true',
+    'isAvailable("claude-code","direct",true',
+    'isAvailable("claude-code","gateway",true',
+  ]) {
+    if (!compactRouterSource.includes(expectedProbe)) {
+      failures.push(
+        `VS Code capabilities must force-refresh CLI probe ${expectedProbe}`,
+      );
+    }
+  }
+
+  for (const providerId of ["codex-cli", "claude-code"]) {
+    if (chromeAutoProviderSource.includes(`"${providerId}"`)) {
+      failures.push(`${providerId} must not be added to Auto provider order`);
+    }
   }
 
   if (failures.length > 0) {
