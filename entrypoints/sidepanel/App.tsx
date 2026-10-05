@@ -49,8 +49,10 @@ import { readUtf8Stream, finishStoppedConversation } from "./stream-reader";
 import {
   CUSTOM_PROMPTS_STORAGE_KEY,
   canDispatchPendingAction,
+  claimPendingAction,
   type CustomPrompt,
   DEFAULT_CUSTOM_PROMPTS,
+  describePendingWait,
   getPendingActionTabId,
   normalizeCustomPrompts,
   type PendingAction,
@@ -96,12 +98,7 @@ import {
   undoLastDisplayEdit,
 } from "./browser-execution";
 import { readPageWithRecovery, type PageContextResult } from "./page-context";
-import {
-  canEditDisplay,
-  DISPLAY_EDIT_ORIGINS_KEY,
-  displayEditOrigin,
-  normalizeDisplayEditOrigins,
-} from "./display-edit-permission";
+import { canEditDisplay } from "./display-edit-permission";
 
 const DEFAULT_SETTINGS: LLMSettings = {
   provider: "auto",
@@ -320,79 +317,7 @@ export default function App() {
     clickApprovalResolver.current = null;
     setClickApproval(null);
   };
-  const [displayEditingEnabled, setDisplayEditingEnabled] = useState(false);
   const activeDisplayEditRef = useRef(false);
-  const activeDisplayOriginRef = useRef("");
-  const [displayEditOrigins, setDisplayEditOrigins] = useState<string[]>([]);
-  const [displaySiteOrigin, setDisplaySiteOrigin] = useState("");
-  const displaySiteOriginRef = useRef("");
-  const displayOnceOriginRef = useRef("");
-  const [displayPermissionReady, setDisplayPermissionReady] = useState(false);
-  const [displayPermissionSaving, setDisplayPermissionSaving] = useState(false);
-  const [displayPermissionError, setDisplayPermissionError] = useState(false);
-  useEffect(() => {
-    let disposed = false;
-    const onChanged = (
-      changes: Record<string, chrome.storage.StorageChange>,
-      area: string,
-    ) => {
-      if (area !== "local" || !changes[DISPLAY_EDIT_ORIGINS_KEY]) return;
-      const next = normalizeDisplayEditOrigins(
-        changes[DISPLAY_EDIT_ORIGINS_KEY].newValue,
-      );
-      const previous = normalizeDisplayEditOrigins(
-        changes[DISPLAY_EDIT_ORIGINS_KEY].oldValue,
-      );
-      if (
-        previous.includes(activeDisplayOriginRef.current) &&
-        !next.includes(activeDisplayOriginRef.current)
-      ) {
-        activeDisplayEditRef.current = false;
-        abortControllerRef.current?.abort();
-      }
-      if (!disposed) setDisplayEditOrigins(next);
-    };
-    chrome.storage.onChanged.addListener(onChanged);
-    void chrome.storage.local.get(DISPLAY_EDIT_ORIGINS_KEY).then(
-      (stored) => {
-        if (disposed) return;
-        setDisplayEditOrigins(
-          normalizeDisplayEditOrigins(stored[DISPLAY_EDIT_ORIGINS_KEY]),
-        );
-        setDisplayPermissionReady(true);
-      },
-      () => {
-        if (!disposed) setDisplayPermissionError(true);
-      },
-    );
-    return () => {
-      disposed = true;
-      chrome.storage.onChanged.removeListener(onChanged);
-    };
-  }, []);
-  const saveDisplayPermission = async (origin: string, enabled: boolean) => {
-    if (!origin || displayPermissionSaving) return false;
-    setDisplayPermissionSaving(true);
-    setDisplayPermissionError(false);
-    try {
-      const saved = await chrome.runtime.sendMessage({
-        type: "display-edit",
-        operation: "permission",
-        origin,
-        enabled,
-      });
-      if (!saved?.ok) throw new Error("Permission could not be saved");
-      const next = normalizeDisplayEditOrigins(saved.origins);
-      setDisplayEditOrigins(next);
-      setDisplayPermissionReady(true);
-      return true;
-    } catch {
-      setDisplayPermissionError(true);
-      return false;
-    } finally {
-      setDisplayPermissionSaving(false);
-    }
-  };
   const [undoDisplayTabIds, setUndoDisplayTabIds] = useState<Set<number>>(
     () => new Set(),
   );
@@ -404,11 +329,6 @@ export default function App() {
         ([tab]) => {
           if (!disposed) {
             setActiveTabId(tab?.id ?? null);
-            const origin = displayEditOrigin(tab?.url);
-            setDisplaySiteOrigin(origin);
-            if (origin !== displaySiteOriginRef.current)
-              setDisplayEditingEnabled(false);
-            displaySiteOriginRef.current = origin;
             if (tab?.id !== undefined) {
               const tabId = tab.id;
               void recoverDisplayEdits(tabId)
@@ -480,16 +400,43 @@ export default function App() {
   const [customPrompts, setCustomPrompts] = useState<CustomPrompt[]>(() =>
     DEFAULT_CUSTOM_PROMPTS.map((prompt) => ({ ...prompt })),
   );
-  const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
+  const [pendingPrompt, setPendingPrompt] = useState<{
+    prompt: string;
+    seq: number;
+  } | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const inFlightRequestRef = useRef(false);
   const screenshotPermissionWarnedRef = useRef(false);
   const screenshotFallbackWarnedRef = useRef(false);
   const settingsLoadedRef = useRef(false);
-  const pendingPromptDispatchRef = useRef<string | null>(null);
+  const pendingPromptDispatchRef = useRef<number | null>(null);
   const pendingPromptTabIdRef = useRef<number | null>(null);
+  const pendingSeqRef = useRef(0);
+  const seenPendingIdsRef = useRef(new Set<string>());
   const activeContentTabIdRef = useRef<number | null>(null);
   const languageRef = useRef<Language>("ja");
+  // The panel can receive the same context-menu action from both the initial read and storage.onChanged.
+  const queuePendingAction = (action: unknown, lang: Language) => {
+    if (!claimPendingAction(action, seenPendingIdsRef.current)) return;
+    const prompt = toPendingPrompt(action, lang);
+    if (!prompt) return;
+    const pendingType = (action as PendingAction).type;
+    pendingTaskRef.current =
+      pendingType === "post"
+        ? { kind: "post", instructions: prompt }
+        : pendingType === "customPrompt"
+          ? { kind: "custom", instructions: prompt }
+          : { kind: "summary" };
+    pendingPromptTabIdRef.current = getPendingActionTabId(action);
+    pendingSeqRef.current += 1;
+    setPendingPrompt({ prompt, seq: pendingSeqRef.current });
+  };
+  const cancelPendingAction = () => {
+    setPendingPrompt(null);
+    pendingTaskRef.current = undefined;
+    pendingPromptTabIdRef.current = null;
+    void chrome.storage.local.remove("pendingAction");
+  };
 
   // Load settings from storage
   useEffect(() => {
@@ -592,22 +539,7 @@ export default function App() {
 
         setEvaluateActionEnabled(effectiveAllowEvaluateAction);
 
-        const nextPendingPrompt = toPendingPrompt(
-          result.pendingAction,
-          effectiveLanguage,
-        );
-        if (nextPendingPrompt) {
-          pendingTaskRef.current =
-            result.pendingAction?.type === "post"
-              ? { kind: "post", instructions: nextPendingPrompt }
-              : result.pendingAction?.type === "customPrompt"
-                ? { kind: "custom", instructions: nextPendingPrompt }
-                : { kind: "summary" };
-          pendingPromptTabIdRef.current = getPendingActionTabId(
-            result.pendingAction,
-          );
-          setPendingPrompt(nextPendingPrompt);
-        }
+        queuePendingAction(result.pendingAction, effectiveLanguage);
 
         settingsLoadedRef.current = true;
         void checkConnection(effectiveServerPort);
@@ -639,18 +571,7 @@ export default function App() {
       if (newValue === undefined || newValue === null) {
         return;
       }
-      const prompt = toPendingPrompt(newValue, languageRef.current);
-      if (prompt) {
-        const pendingType = (newValue as PendingAction).type;
-        pendingTaskRef.current =
-          pendingType === "post"
-            ? { kind: "post", instructions: prompt }
-            : pendingType === "customPrompt"
-              ? { kind: "custom", instructions: prompt }
-              : { kind: "summary" };
-        pendingPromptTabIdRef.current = getPendingActionTabId(newValue);
-        setPendingPrompt(prompt);
-      }
+      queuePendingAction(newValue, languageRef.current);
     };
     chrome.storage.onChanged.addListener(handler);
     return () => {
@@ -1746,24 +1667,13 @@ export default function App() {
           ? await chrome.tabs.get(activeContentTabIdRef.current)
           : (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
       activeContentTabIdRef.current = targetTab?.id ?? null;
-      const storedDisplayPermission = displayPermissionReady
-        ? await chrome.storage.local.get(DISPLAY_EDIT_ORIGINS_KEY)
-        : {};
       editingForRun = canEditDisplay({
         url: targetTab?.url,
         mode: assistantSettings.mode,
         browserActionsEnabled,
         task: Boolean(task),
-        once:
-          displayPermissionReady &&
-          displayEditingEnabled &&
-          displayOnceOriginRef.current === displayEditOrigin(targetTab?.url),
-        origins: normalizeDisplayEditOrigins(
-          storedDisplayPermission[DISPLAY_EDIT_ORIGINS_KEY],
-        ),
       });
       activeDisplayEditRef.current = editingForRun;
-      activeDisplayOriginRef.current = displayEditOrigin(targetTab?.url);
       if (
         targetTab?.id !== undefined &&
         (privateTabsRef.current.has(targetTab.id) ||
@@ -1776,9 +1686,7 @@ export default function App() {
           operation: "start",
           tabId: targetTab?.id,
           url: targetTab?.url,
-          once:
-            displayEditingEnabled &&
-            displayOnceOriginRef.current === displayEditOrigin(targetTab?.url),
+          once: true,
         });
         if (!started?.ok || typeof started.taskId !== "string")
           throw new TaskBlockedError(
@@ -2189,27 +2097,14 @@ export default function App() {
                 personal: personalForRun,
                 signal: abortControllerRef.current?.signal,
                 displayTaskId,
-                authorizeDisplayEdit: async () => {
-                  const stored = await chrome.storage.local.get(
-                    DISPLAY_EDIT_ORIGINS_KEY,
-                  );
-                  return (
-                    activeDisplayEditRef.current &&
-                    canEditDisplay({
-                      url: context.target?.url,
-                      mode: context.mode,
-                      browserActionsEnabled,
-                      task: Boolean(task),
-                      once:
-                        displayEditingEnabled &&
-                        displayOnceOriginRef.current ===
-                          displayEditOrigin(context.target?.url),
-                      origins: normalizeDisplayEditOrigins(
-                        stored[DISPLAY_EDIT_ORIGINS_KEY],
-                      ),
-                    })
-                  );
-                },
+                authorizeDisplayEdit: async () =>
+                  activeDisplayEditRef.current &&
+                  canEditDisplay({
+                    url: context.target?.url,
+                    mode: context.mode,
+                    browserActionsEnabled,
+                    task: Boolean(task),
+                  }),
               };
               const button =
                 action.type === "click"
@@ -2758,8 +2653,6 @@ export default function App() {
           .catch(() => undefined);
       }
       activeDisplayEditRef.current = false;
-      activeDisplayOriginRef.current = "";
-      if (editingForRun) setDisplayEditingEnabled(false);
       if (abortControllerRef.current?.signal.aborted) {
         setMessages((previous) =>
           finishStoppedConversation(
@@ -2788,13 +2681,13 @@ export default function App() {
       return;
     }
 
-    if (pendingPromptDispatchRef.current === pendingPrompt) {
+    if (pendingPromptDispatchRef.current === pendingPrompt.seq) {
       return;
     }
 
-    const prompt = pendingPrompt;
+    const { prompt, seq } = pendingPrompt;
     const targetTabId = pendingPromptTabIdRef.current;
-    pendingPromptDispatchRef.current = prompt;
+    pendingPromptDispatchRef.current = seq;
     activeContentTabIdRef.current = targetTabId;
     setPendingPrompt(null);
     pendingPromptTabIdRef.current = null;
@@ -2814,7 +2707,7 @@ export default function App() {
       [],
       task,
     ).finally(() => {
-      if (pendingPromptDispatchRef.current === prompt) {
+      if (pendingPromptDispatchRef.current === seq) {
         pendingPromptDispatchRef.current = null;
       }
       if (activeContentTabIdRef.current === targetTabId) {
@@ -3069,11 +2962,26 @@ export default function App() {
         }) && (
           <div
             role="status"
-            className="px-4 py-2 text-xs bg-amber-50 text-amber-900 border-b border-amber-200"
+            className="px-4 py-1 text-xs bg-amber-50 text-amber-900 border-b border-amber-200 flex items-center gap-2"
           >
-            {language === "ja"
-              ? "操作を待機しています。接続準備または現在の処理の完了待ちです。"
-              : "Action queued: waiting for bridge readiness or the current task."}
+            <span className="flex-1 min-w-0">
+              {describePendingWait(
+                {
+                  isLoading,
+                  isReadingPage,
+                  isConnected,
+                  contextVersion: bridgeCapabilities?.contextVersion,
+                },
+                language,
+              )}
+            </span>
+            <button
+              type="button"
+              className="underline shrink-0"
+              onClick={cancelPendingAction}
+            >
+              {language === "ja" ? "取り消す" : "Cancel"}
+            </button>
           </div>
         )}
       {!isConnected && (
@@ -3157,7 +3065,6 @@ export default function App() {
           onBrowserActionsChange={(enabled) => {
             if (!enabled) {
               stopGeneration();
-              setDisplayEditingEnabled(false);
             }
             setBrowserActionsEnabled(enabled);
           }}
@@ -3222,8 +3129,6 @@ export default function App() {
             value={assistantSettings.mode}
             onChange={(event) => {
               stopGeneration();
-              if (event.target.value === "read-only")
-                setDisplayEditingEnabled(false);
               setAssistantSettings({
                 ...assistantSettings,
                 mode: event.target.value as typeof assistantSettings.mode,
@@ -3283,95 +3188,6 @@ export default function App() {
                     </button>
                   </div>
                 ))}
-            </details>
-          )}
-          <label className="flex items-center gap-1 min-w-0">
-            <span>{language === "ja" ? "表示編集" : "Display editing"}</span>
-            <select
-              aria-label={
-                language === "ja"
-                  ? "表示編集の許可"
-                  : "Display editing permission"
-              }
-              title={displaySiteOrigin}
-              className="border rounded p-1 min-w-0 max-w-full disabled:opacity-50"
-              value={
-                displayEditOrigins.includes(displaySiteOrigin)
-                  ? "site"
-                  : displayEditingEnabled
-                    ? "once"
-                    : "off"
-              }
-              disabled={
-                displayPermissionSaving ||
-                !displaySiteOrigin ||
-                !browserActionsEnabled ||
-                assistantSettings.mode === "read-only"
-              }
-              onChange={async (event) => {
-                const mode = event.target.value;
-                const origin = displaySiteOrigin;
-                stopGeneration();
-                setDisplayEditingEnabled(false);
-                if (await saveDisplayPermission(origin, mode === "site")) {
-                  if (displaySiteOriginRef.current === origin) {
-                    displayOnceOriginRef.current =
-                      mode === "once" ? origin : "";
-                    setDisplayEditingEnabled(mode === "once");
-                  }
-                }
-              }}
-            >
-              <option value="off">
-                {language === "ja" ? "許可しない" : "Off"}
-              </option>
-              <option value="once">
-                {language === "ja" ? "今回だけ" : "This task"}
-              </option>
-              <option value="site">
-                {language === "ja"
-                  ? "このサイトでは常に許可"
-                  : "Always on this site"}
-              </option>
-            </select>
-          </label>
-          {displayPermissionError && (
-            <span role="alert" className="text-red-700">
-              {language === "ja"
-                ? "表示編集の許可を保存できませんでした。選び直してください。"
-                : "Could not save display permission. Select it again."}
-            </span>
-          )}
-          {displayEditOrigins.length > 0 && (
-            <details className="text-xs max-w-full">
-              <summary className="cursor-pointer">
-                {language === "ja"
-                  ? "表示編集の許可サイト"
-                  : "Display editing sites"}
-              </summary>
-              {displayEditOrigins.map((origin) => (
-                <div
-                  key={origin}
-                  className="flex items-center gap-2 max-w-full"
-                >
-                  <span className="truncate" title={origin}>
-                    {origin}
-                  </span>
-                  <button
-                    type="button"
-                    className="text-red-700 shrink-0"
-                    disabled={displayPermissionSaving}
-                    aria-label={`${origin} ${language === "ja" ? "の表示編集許可を解除" : "revoke display permission"}`}
-                    onClick={() => {
-                      if (origin === activeDisplayOriginRef.current)
-                        stopGeneration();
-                      void saveDisplayPermission(origin, false);
-                    }}
-                  >
-                    {language === "ja" ? "解除" : "Revoke"}
-                  </button>
-                </div>
-              ))}
             </details>
           )}
           {activeTabId !== null && undoDisplayTabIds.has(activeTabId) && (

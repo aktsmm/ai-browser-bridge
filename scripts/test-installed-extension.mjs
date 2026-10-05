@@ -436,10 +436,8 @@ try {
     .getByRole("button", { name: "Fixture Post", exact: true })
     .waitFor();
   await panel
-    .getByText(
-      "Action queued: waiting for bridge readiness or the current task.",
-      { exact: true },
-    )
+    .getByRole("status")
+    .getByRole("button", { name: "Cancel", exact: true })
     .waitFor();
   assert.equal(
     (await worker.evaluate(() => chrome.storage.local.get("pendingAction")))
@@ -452,6 +450,14 @@ try {
     .getByText("Installed extension response.", { exact: true })
     .waitFor();
   assert.equal(requests.length, 1);
+  assert.equal(
+    await panel
+      .getByRole("status")
+      .getByRole("button", { name: "Cancel", exact: true })
+      .count(),
+    0,
+    "Dispatched menu action must not leave a queued banner behind",
+  );
   assert(requests[0].pageContent.includes("Verified local article"));
   assert(requests[0].pageContent.includes("Shadow fixture content"));
   assert(requests[0].pageContent.includes("Nested fixture content"));
@@ -474,48 +480,6 @@ try {
       document.querySelector("#display-heading").innerHTML =
         "<span>Do you need a break?</span>";
     });
-    const permission = panel.getByLabel("Display editing permission", {
-      exact: true,
-    });
-    await permission.selectOption("site");
-    await panel
-      .waitForFunction(() => {
-        const select = document.querySelector(
-          'select[aria-label="Display editing permission"]',
-        );
-        return select?.value === "site" && !select.disabled;
-      })
-      .catch(async (error) => {
-        const diagnostic = await panel.evaluate(
-          async (origin) => ({
-            select: document.querySelector(
-              'select[aria-label="Display editing permission"]',
-            )?.value,
-            alerts: Array.from(document.querySelectorAll('[role="alert"]')).map(
-              (element) => element.textContent,
-            ),
-            result: await chrome.runtime.sendMessage({
-              type: "display-edit",
-              operation: "permission",
-              origin,
-              enabled: true,
-            }),
-          }),
-          new URL(fixtureUrl).origin,
-        );
-        throw new Error(
-          `Display permission setup failed: ${JSON.stringify(diagnostic)}`,
-          { cause: error },
-        );
-      });
-    assert.deepEqual(
-      (
-        await panel.evaluate(() =>
-          chrome.storage.local.get("displayEditOriginsV1"),
-        )
-      ).displayEditOriginsV1,
-      [new URL(fixtureUrl).origin],
-    );
     const send = async (text) => {
       const input = panel.locator("form textarea").last();
       await input.fill(text);
@@ -551,7 +515,6 @@ try {
       .filter({ hasText: "Not executed: [ACTION: click, #receipt-one]" });
     await hiddenCommand.waitFor({ state: "attached" });
     assert.equal(await hiddenCommand.isVisible(), false);
-    assert.equal(await permission.inputValue(), "site");
     const taskRequests = requests.slice(1);
     assert.equal(taskRequests.length, 3);
     assert(taskRequests[0].context.allowedActions.includes("findDisplayText"));
@@ -647,8 +610,7 @@ try {
     );
     await secondEdited.close();
     await panel.reload();
-    await permission.waitFor();
-    assert.equal(await permission.inputValue(), "site");
+    await panel.locator("form textarea").last().waitFor();
     await panel.evaluate(
       (tabId) => chrome.tabs.update(tabId, { active: true }),
       sourceTabId,
@@ -706,40 +668,12 @@ try {
       "Do you need a break?",
     );
     beforeDisplayReplacement = async () => {};
-    await permission.selectOption("off");
-    await panel.waitForFunction(() => {
-      const select = document.querySelector(
-        'select[aria-label="Display editing permission"]',
-      );
-      return select?.value === "off" && !select.disabled;
-    });
-    assert.deepEqual(
-      (
-        await panel.evaluate(() =>
-          chrome.storage.local.get("displayEditOriginsV1"),
-        )
-      ).displayEditOriginsV1,
-      [],
-    );
-    await permission.selectOption("once");
-    await panel.waitForFunction(() => {
-      const select = document.querySelector(
-        'select[aria-label="Display editing permission"]',
-      );
-      return select?.value === "once" && !select.disabled;
-    });
-    await panel.evaluate(async (url) => {
-      const tab = await chrome.tabs.create({ url, active: false });
-      await chrome.tabs.update(tab.id, { url: `${url}?updated` });
-    }, fixtureUrl);
-    assert.equal(await permission.inputValue(), "once");
     await send("Correct malformed heading edit");
     await source.waitForFunction(
       () =>
         document.querySelector("#display-heading").textContent === "Enjoy Work",
     );
     await panel.getByRole("button", { name: "Send", exact: true }).waitFor();
-    assert.equal(await permission.inputValue(), "off");
     await source.evaluate(() => {
       const host = document.createElement("div");
       host.id = "large-dom-fixture";
@@ -834,18 +768,11 @@ try {
       );
       await panel.reload();
       panel.setDefaultTimeout(120000);
-      await permission.waitFor();
+      await panel.locator("form textarea").last().waitFor();
       await panel.evaluate(
         (tabId) => chrome.tabs.update(tabId, { active: true }),
         sourceTabId,
       );
-      await permission.selectOption("site");
-      await panel.waitForFunction(() => {
-        const select = document.querySelector(
-          'select[aria-label="Display editing permission"]',
-        );
-        return select?.value === "site" && !select.disabled;
-      });
       liveActive = true;
       await send(
         "On this synthetic local page, temporarily change the exact visible heading Enjoy Work to Live verified heading. First use findDisplayText with that exact text, then use the returned display ref in replaceText. Emit only one permitted ACTION per response and wait for execution results. Do not create files, navigate, click, submit, or use any other tools.",
@@ -902,13 +829,6 @@ try {
         ),
       );
       liveActive = values["live-display"];
-      await permission.selectOption("site");
-      await panel.waitForFunction(() => {
-        const select = document.querySelector(
-          'select[aria-label="Display editing permission"]',
-        );
-        return select?.value === "site" && !select.disabled;
-      });
       await panel.evaluate(async (tabId) => {
         const tab = await chrome.tabs.get(tabId);
         const button = document.createElement("button");
@@ -1001,7 +921,7 @@ try {
           awaitPromise: true,
           returnByValue: true,
           expression: `new Promise(resolve => {
-          const ready = () => Boolean(document.querySelector('form textarea') && document.querySelector('select[aria-label="Display editing permission"]')?.value === 'site');
+          const ready = () => Boolean(document.querySelector('form textarea'));
           if (ready()) return resolve(true);
           const observer = new MutationObserver(() => { if (ready()) { clearTimeout(timer); observer.disconnect(); resolve(true); } });
           const timer = setTimeout(() => { observer.disconnect(); resolve(false); }, 10000);
@@ -1145,7 +1065,7 @@ try {
       ),
     );
     console.log(
-      "Display editing fixture PASS: form heading, 120 refs, persistent permission, undo, duplicates, stale DOM, report-only and responsive UI",
+      "Display editing fixture PASS: form heading, 120 refs, always-on permission, undo, duplicates, stale DOM, report-only and responsive UI",
     );
   } else {
     const pageStatus = panel.getByRole("region", { name: "Page context" });

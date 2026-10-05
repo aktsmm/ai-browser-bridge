@@ -30,15 +30,12 @@ export function canEditDisplay(options: {
   mode: string;
   browserActionsEnabled: boolean;
   task: boolean;
-  once: boolean;
-  origins: readonly string[];
 }): boolean {
   const origin = displayEditOrigin(options.url);
   return Boolean(
     origin &&
     options.browserActionsEnabled &&
     !options.task &&
-    ["input", "automation"].includes(options.mode) &&
-    (options.once || options.origins.includes(origin)),
+    ["input", "automation"].includes(options.mode),
   );
 }

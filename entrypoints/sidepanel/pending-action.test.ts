@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  claimPendingAction,
+  getPendingActionId,
   getPendingActionTabId,
   canDispatchPendingAction,
+  describePendingWait,
   getSummarizeAndSavePrompt,
   normalizeCustomPrompts,
   pageContentInjectionGuard,
@@ -41,6 +44,41 @@ describe("toPendingPrompt", () => {
       false,
     );
     expect(canDispatchPendingAction(ready)).toBe(true);
+  });
+  it("explains why a queued menu action is waiting", () => {
+    const ready = {
+      isLoading: false,
+      isReadingPage: false,
+      isConnected: true,
+      contextVersion: 1,
+    };
+    expect(
+      describePendingWait({ ...ready, isConnected: false }, "ja"),
+    ).toContain("接続");
+    expect(
+      describePendingWait({ ...ready, contextVersion: undefined }, "en"),
+    ).toContain("capabilities");
+    expect(
+      describePendingWait({ ...ready, contextVersion: 0 }, "en"),
+    ).toContain("outdated");
+    expect(describePendingWait({ ...ready, isLoading: true }, "en")).toContain(
+      "current task",
+    );
+  });
+  it("reads only non-empty string pending action ids", () => {
+    expect(getPendingActionId({ type: "post", id: "a1" })).toBe("a1");
+    expect(getPendingActionId({ type: "post", id: "" })).toBeNull();
+    expect(getPendingActionId({ type: "post", id: 1 })).toBeNull();
+    expect(getPendingActionId(null)).toBeNull();
+  });
+  it("claims a stored action once even when delivered by both read and change event", () => {
+    const seen = new Set<string>();
+    const action = { type: "post", id: "a1" };
+    expect(claimPendingAction(action, seen)).toBe(true);
+    expect(claimPendingAction({ ...action }, seen)).toBe(false);
+    expect(claimPendingAction({ type: "post", id: "a2" }, seen)).toBe(true);
+    expect(claimPendingAction({ type: "post" }, seen)).toBe(true);
+    expect(claimPendingAction({ type: "post" }, seen)).toBe(true);
   });
   it("returns null for null or non-object input", () => {
     expect(toPendingPrompt(null, "ja")).toBeNull();

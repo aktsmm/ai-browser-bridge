@@ -144,6 +144,9 @@ describe("background context menu actions", () => {
 
     expect(events).toEqual(["store-started", "open-called"]);
     expect(openSidePanel).toHaveBeenCalledWith(999);
+    expect(setPendingAction).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "summarize", id: expect.any(String) }),
+    );
     resolveStore?.();
     await result;
   });

@@ -216,7 +216,10 @@ export async function handleContextMenuClick(
   );
   if (!pendingAction) return;
 
-  const storePromise = deps.setPendingAction(pendingAction);
+  const storePromise = deps.setPendingAction({
+    ...pendingAction,
+    id: crypto.randomUUID(),
+  });
   const openPromise = deps.openSidePanel(tab.windowId);
   await Promise.all([storePromise, openPromise]);
 }

@@ -37,29 +37,21 @@ describe("assistant settings", () => {
       mode: "input",
       browserActionsEnabled: true,
       task: false,
-      once: false,
-      origins,
     };
     expect(canEditDisplay(options)).toBe(true);
     expect(canEditDisplay({ ...options, url: "https://sub.example.com" })).toBe(
-      false,
+      true,
     );
-    expect(canEditDisplay({ ...options, url: "http://example.com" })).toBe(
-      false,
-    );
-    expect(canEditDisplay({ ...options, mode: "read-only", once: true })).toBe(
-      false,
-    );
-    expect(canEditDisplay({ ...options, task: true, once: true })).toBe(false);
+    expect(canEditDisplay({ ...options, mode: "read-only" })).toBe(false);
+    expect(canEditDisplay({ ...options, task: true })).toBe(false);
     expect(canEditDisplay({ ...options, browserActionsEnabled: false })).toBe(
       false,
     );
-    expect(canEditDisplay({ ...options, origins: [] })).toBe(false);
-    expect(canEditDisplay({ ...options, once: true, origins: [] })).toBe(true);
-    expect(canEditDisplay({ ...options, url: "", once: true })).toBe(false);
-    expect(canEditDisplay({ ...options, mode: "unknown", once: true })).toBe(
+    expect(canEditDisplay({ ...options, url: "" })).toBe(false);
+    expect(canEditDisplay({ ...options, url: "chrome://settings" })).toBe(
       false,
     );
+    expect(canEditDisplay({ ...options, mode: "unknown" })).toBe(false);
   });
   it("defaults to input assist and preserves bounded, unique profiles", () => {
     expect(normalizeAssistantSettings(null).mode).toBe("input");

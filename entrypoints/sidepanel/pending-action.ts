@@ -1,17 +1,41 @@
 import type { Language } from "./i18n";
 
-export function canDispatchPendingAction(state: {
+type PendingDispatchState = {
   isLoading: boolean;
   isReadingPage: boolean;
   isConnected: boolean;
   contextVersion?: number;
-}): boolean {
+};
+
+export function canDispatchPendingAction(state: PendingDispatchState): boolean {
   return (
     !state.isLoading &&
     !state.isReadingPage &&
     state.isConnected &&
     state.contextVersion === 1
   );
+}
+
+export function describePendingWait(
+  state: PendingDispatchState,
+  lang: Language,
+): string {
+  const ja = lang === "ja";
+  if (!state.isConnected)
+    return ja
+      ? "VS Code のブリッジに接続できるまで待機しています。"
+      : "Waiting for the VS Code bridge connection.";
+  if (state.contextVersion === undefined)
+    return ja
+      ? "ブリッジの機能情報を確認しています。"
+      : "Checking bridge capabilities.";
+  if (state.contextVersion !== 1)
+    return ja
+      ? "ブリッジが古いため実行できません。VS Code 拡張を更新してください。"
+      : "The bridge is outdated. Update the VS Code extension.";
+  return ja
+    ? "現在の処理が終わり次第、実行します。"
+    : "Runs after the current task finishes.";
 }
 
 /** ユーザーが設定画面で編集できるカスタムプロンプト1件。 */
@@ -355,7 +379,7 @@ export function getSummarizeAndSavePrompt(lang: Language): string {
   }`;
 }
 
-export type PendingAction =
+export type PendingAction = (
   | {
       type: "question";
       text: string;
@@ -384,7 +408,26 @@ export type PendingAction =
       tabId?: number;
       url?: string;
       title?: string;
-    };
+    }
+) & { id?: string };
+
+export function getPendingActionId(action: unknown): string | null {
+  if (!action || typeof action !== "object") return null;
+  const id = (action as { id?: unknown }).id;
+  return typeof id === "string" && id ? id : null;
+}
+
+/** Returns false when the same stored action was already delivered to this panel. */
+export function claimPendingAction(
+  action: unknown,
+  seenIds: Set<string>,
+): boolean {
+  const id = getPendingActionId(action);
+  if (!id) return true;
+  if (seenIds.has(id)) return false;
+  seenIds.add(id);
+  return true;
+}
 
 export function getPendingActionTabId(action: unknown): number | null {
   if (!action || typeof action !== "object") {
