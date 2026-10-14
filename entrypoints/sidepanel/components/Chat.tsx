@@ -18,15 +18,12 @@ import {
 } from "../attachments";
 import {
   type CustomPrompt,
-  getPostPrompt,
   getSummarizeAndSavePrompt,
   getSummarizePrompt,
-  type PostLength,
 } from "../pending-action";
 import { getDownloadShowId } from "../download-id";
 
 type QuickAction = {
-  kind?: "post";
   icon: string;
   label: string;
   prompt: string;
@@ -214,11 +211,7 @@ export function separateToolLogs(
   return { answer: answer.trim(), logs };
 }
 
-export function getQuickActions(
-  lang: Language,
-  postLength: PostLength = "short",
-): QuickAction[] {
-  const lenLabel = postLength === "short" ? "140" : "500";
+export function getQuickActions(lang: Language): QuickAction[] {
   return lang === "ja"
     ? [
         {
@@ -245,18 +238,6 @@ export function getQuickActions(
           prompt:
             "直前の回答を、内容は変えずに読みやすいMarkdownへ整えてください。見出し、箇条書き、出典URLが分かる形にし、保存や新しいブラウザ操作やページ遷移はしないでください。",
         },
-        {
-          icon: "🐦",
-          label: `ポスト軽（${lenLabel}）`,
-          kind: "post",
-          prompt: getPostPrompt("ja", "casual", postLength),
-        },
-        {
-          icon: "📝",
-          label: `ポスト硬（${lenLabel}）`,
-          kind: "post",
-          prompt: getPostPrompt("ja", "formal", postLength),
-        },
       ]
     : [
         {
@@ -282,18 +263,6 @@ export function getQuickActions(
           label: "Polish",
           prompt:
             "Polish the previous answer into readable Markdown without changing the substance. Add clear headings and bullets, and include the source URL when available. Do not save files. Do not navigate, click, or perform new browser actions.",
-        },
-        {
-          icon: "🐦",
-          label: `Post casual (${lenLabel})`,
-          kind: "post",
-          prompt: getPostPrompt("en", "casual", postLength),
-        },
-        {
-          icon: "📝",
-          label: `Post formal (${lenLabel})`,
-          kind: "post",
-          prompt: getPostPrompt("en", "formal", postLength),
         },
       ];
 }
@@ -367,7 +336,6 @@ export function Chat({
 }: ChatProps) {
   const [input, setInput] = useState("");
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
-  const [postLength, setPostLength] = useState<PostLength>("short");
   const [pendingAttachments, setPendingAttachments] = useState<
     ChatAttachment[]
   >([]);
@@ -989,48 +957,11 @@ export function Chat({
                     isAssistantAnswer(message) &&
                     index === messages.length - 1 && (
                       <div className="mt-3 pt-2 border-t border-gray-200 flex flex-wrap gap-2">
-                        <button
-                          onClick={() =>
-                            setPostLength((prev) =>
-                              prev === "short" ? "long" : "short",
-                            )
-                          }
-                          aria-pressed={postLength === "long"}
-                          aria-label={
-                            language === "ja"
-                              ? `ポストの長さ: 現在${postLength === "short" ? "140字" : "500字"}。切り替え`
-                              : `Post length: currently ${postLength === "short" ? "140" : "500"} chars. Toggle`
-                          }
-                          title={
-                            language === "ja"
-                              ? "ポストの長さを切り替え（140字 / 500字）"
-                              : "Toggle post length (140 / 500 chars)"
-                          }
-                          className="text-xs px-2 py-1 rounded bg-blue-100 hover:bg-blue-200 text-blue-800"
-                        >
-                          <span className="mr-1">🔁</span>
-                          {postLength === "short" ? "140" : "500"}
-                        </button>
-                        {getQuickActions(language, postLength).map((action) => (
+                        {getQuickActions(language).map((action) => (
                           <button
                             key={action.label}
                             disabled={Boolean(disabledReason)}
-                            onClick={() =>
-                              onSendMessage(
-                                action.kind === "post"
-                                  ? language === "ja"
-                                    ? "現在のページについて投稿文を作成してください。"
-                                    : "Draft a post about the current page."
-                                  : action.prompt,
-                                [],
-                                action.kind
-                                  ? {
-                                      kind: action.kind,
-                                      instructions: action.prompt,
-                                    }
-                                  : undefined,
-                              )
-                            }
+                            onClick={() => onSendMessage(action.prompt)}
                             className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200 text-gray-700"
                           >
                             <span className="mr-1">{action.icon}</span>

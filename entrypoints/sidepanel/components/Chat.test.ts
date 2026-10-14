@@ -422,36 +422,40 @@ describe("getQuickActions", () => {
     );
   });
 
-  it("includes a post quick action with hashtags in both languages", () => {
-    const ja = getQuickActions("ja").find(
-      (action) => action.label === "ポスト軽（140）",
-    );
-    expect(ja?.prompt).toContain("ハッシュタグ");
-
-    const en = getQuickActions("en").find(
-      (action) => action.label === "Post casual (140)",
-    );
-    expect(en?.prompt).toContain("hashtags");
+  it("leaves post creation to the presets instead of built-in quick actions", () => {
+    for (const lang of ["ja", "en"] as const) {
+      const labels = getQuickActions(lang)
+        .map((action) => action.label)
+        .join("\n");
+      expect(labels).not.toMatch(/ポスト|Post/);
+    }
   });
 
-  it("reflects the post length parameter in labels and prompts", () => {
-    const jaShort = getQuickActions("ja", "short");
-    expect(
-      jaShort.find((a) => a.label === "ポスト軽（140）")?.prompt,
-    ).toContain("140字以内");
-    expect(
-      jaShort.find((a) => a.label === "ポスト硬（140）")?.prompt,
-    ).toContain("140字以内");
-    const jaLong = getQuickActions("ja", "long");
-    expect(jaLong.find((a) => a.label === "ポスト軽（500）")?.prompt).toContain(
-      "500字以内",
+  it("renders each post preset once and no length toggle after an answer", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(Chat, {
+        messages: [{ role: "assistant", content: "Answer" }],
+        isLoading: false,
+        onSendMessage: vi.fn(),
+        onClearMessages: vi.fn(),
+        onStopGeneration: vi.fn(),
+        language: "en",
+        onSaveMarkdown: vi.fn(),
+        onSaveBlogDraft: vi.fn(),
+        postPresets: [
+          {
+            id: "a",
+            name: "Alpha preset",
+            instructions: "",
+            tone: "formal",
+            length: "short",
+            useCommonInstructions: true,
+          },
+        ],
+      }),
     );
-    expect(jaLong.find((a) => a.label === "ポスト硬（500）")?.prompt).toContain(
-      "500字以内",
-    );
-    // 4種すべてが長さトグルで到達可能（casual/formal × short/long）
-    expect(jaShort.some((a) => a.label === "ポスト硬（140）")).toBe(true);
-    expect(jaLong.some((a) => a.label === "ポスト軽（500）")).toBe(true);
+    expect(html.match(/Alpha preset/g)).toHaveLength(1);
+    expect(html).not.toContain("Toggle post length");
   });
 
   it("keeps internal download-show links available for click handling", () => {
