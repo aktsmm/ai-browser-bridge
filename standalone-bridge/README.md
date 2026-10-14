@@ -29,6 +29,8 @@ npm ci
 npm run build
 ```
 
+GitHub Release の zip（ビルド済み）を使う場合は `npm run build` は不要です。Copilot SDK を使うときだけ、展開したフォルダーで `npm ci --omit=dev` を実行してください（Codex CLI / Claude Code / LM Studio だけなら依存のインストールなしで起動できます）。
+
 ## 起動
 
 ```powershell
