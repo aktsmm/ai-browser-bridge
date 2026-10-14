@@ -54,9 +54,12 @@ npm run dev -- --port 3211 --workspace-root ..
 
 ```powershell
 .\scripts\install-startup.ps1                                  # dry-run
-.\scripts\install-startup.ps1 -Apply -Port 3211 -WorkspaceRoot $HOME
+.\scripts\install-startup.ps1 -Apply -Port 3211                # 既定の保存先: ~\AI-Browser-Bridge
+.\scripts\install-startup.ps1 -Apply -WorkspaceRoot D:\notes   # 保存先を変える場合
 .\scripts\uninstall-startup.ps1 -Apply                        # 解除（起動中の bridge は停止しません）
 ```
+
+`--workspace-root` は保存先であり、Copilot SDK の作業ディレクトリにも使われます。広い場所（ホームフォルダーなど）を指定しない専用フォルダー運用を推奨します。
 
 同じポートで既に bridge が動いていると、後から起動したプロセスは「ポート使用中」を出して終了します。
 

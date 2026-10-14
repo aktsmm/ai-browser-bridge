@@ -148,6 +148,50 @@ async function main() {
     )
       failures.push(`VS Code and standalone must declare matching ${name}`);
   }
+
+  // Chrome が VS Code と standalone を別ポートで自動判別する前提の契約。
+  const chromeServerPortSource = await readTextFile(
+    path.join(chromeDirectory, "entrypoints", "sidepanel", "server-port.ts"),
+  );
+  const vscodePackage = JSON.parse(
+    await readTextFile(path.join(vscodeDirectory, "package.json")),
+  );
+  const vscodeDefaultPort =
+    vscodePackage.contributes?.configuration?.properties?.[
+      "copilotBrowserBridge.serverPort"
+    ]?.default;
+  const chromeVscodePort = readExportedNumericConstant(
+    chromeServerPortSource,
+    "DEFAULT_SERVER_PORT",
+  );
+  const chromeStandalonePort = readExportedNumericConstant(
+    chromeServerPortSource,
+    "DEFAULT_STANDALONE_SERVER_PORT",
+  );
+  const standaloneDefaultPort = Number(
+    /export const DEFAULT_STANDALONE_PORT = "(\d+)"/.exec(
+      standaloneServerSource,
+    )?.[1],
+  );
+  if (vscodeDefaultPort !== chromeVscodePort) {
+    failures.push(
+      "VS Code serverPort default must match Chrome DEFAULT_SERVER_PORT",
+    );
+  }
+  if (standaloneDefaultPort !== chromeStandalonePort) {
+    failures.push(
+      "standalone default port must match Chrome DEFAULT_STANDALONE_SERVER_PORT",
+    );
+  }
+  if (chromeVscodePort === chromeStandalonePort) {
+    failures.push("VS Code and standalone default ports must differ");
+  }
+  if (!/bridge:\s*"vscode"/.test(vscodeServerSource)) {
+    failures.push('VS Code /health must report bridge: "vscode"');
+  }
+  if (!/bridge:\s*"standalone"/.test(standaloneServerSource)) {
+    failures.push('standalone /health must report bridge: "standalone"');
+  }
   if (!wxtConfigSource.includes(expectedVersionFallback)) {
     failures.push(
       `wxt.config.ts fallback version must match chrome package.json version ${chromePackage.version}`,

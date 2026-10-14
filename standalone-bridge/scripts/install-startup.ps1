@@ -8,7 +8,7 @@
 [CmdletBinding()]
 param(
   [int]$Port = 3211,
-  [string]$WorkspaceRoot = $HOME,
+  [string]$WorkspaceRoot = (Join-Path $HOME 'AI-Browser-Bridge'),
   [switch]$Apply
 )
 
@@ -25,7 +25,13 @@ if (-not (Test-Path -LiteralPath $entry)) {
   throw "ビルド済みファイルがありません: $entry`nstandalone-bridge で 'npm ci' と 'npm run build' を実行してください。"
 }
 if ($Port -lt 1 -or $Port -gt 65535) { throw "Port が範囲外です: $Port" }
-if (-not (Test-Path -LiteralPath $WorkspaceRoot -PathType Container)) { throw "WorkspaceRoot が存在しません: $WorkspaceRoot" }
+# 既定の専用フォルダだけは Apply 時に作る。それ以外は存在する場所だけを許可する
+$defaultRoot = Join-Path $HOME 'AI-Browser-Bridge'
+if ($WorkspaceRoot -eq $defaultRoot) {
+  if ($Apply) { New-Item -ItemType Directory -Path $WorkspaceRoot -Force | Out-Null }
+} elseif (-not (Test-Path -LiteralPath $WorkspaceRoot -PathType Container)) {
+  throw "WorkspaceRoot が存在しません: $WorkspaceRoot"
+}
 
 # VBScript の文字列リテラル内では " を "" にする
 function ConvertTo-VbsArg([string]$value) { '""' + $value + '""' }
