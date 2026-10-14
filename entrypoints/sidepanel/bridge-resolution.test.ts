@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  isBridgeNetworkError,
   normalizeBridgeMode,
   resolveBridge,
   type BridgeProbeResult,
@@ -102,5 +103,15 @@ describe("normalizeBridgeMode", () => {
     expect(normalizeBridgeMode("x")).toBe("auto");
     expect(normalizeBridgeMode("vscode")).toBe("vscode");
     expect(normalizeBridgeMode("standalone")).toBe("standalone");
+  });
+});
+
+describe("isBridgeNetworkError", () => {
+  it("treats only fetch network failures as a lost bridge", () => {
+    expect(isBridgeNetworkError(new TypeError("Failed to fetch"))).toBe(true);
+    expect(isBridgeNetworkError(new Error("HTTP 500"))).toBe(false);
+    expect(
+      isBridgeNetworkError(new DOMException("aborted", "AbortError")),
+    ).toBe(false);
   });
 });

@@ -36,6 +36,7 @@ import {
 } from "./server-port";
 import {
   RESOLVED_BRIDGE_STORAGE_KEY,
+  isBridgeNetworkError,
   bridgeBaseUrl,
   normalizeBridgeMode,
   resolveBridge,
@@ -2730,6 +2731,8 @@ export default function App() {
             kind: error instanceof TaskBlockedError ? "notice" : "error",
           },
         ]);
+        // bridge が落ちた場合は接続先を取り直し、VS Code 停止時に standalone へ切り替える
+        if (isBridgeNetworkError(error)) void checkConnection();
       }
     } finally {
       if (displayTaskId) {

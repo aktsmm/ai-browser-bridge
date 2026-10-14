@@ -29,6 +29,11 @@ export function bridgeBaseUrl(port: number): string {
   return `http://127.0.0.1:${port}`;
 }
 
+/** fetch がサーバーへ届かなかった失敗（TypeError）。中断や HTTP エラーは含めない。 */
+export function isBridgeNetworkError(error: unknown): boolean {
+  return error instanceof TypeError;
+}
+
 /**
  * mode に従い /health が通る最初の bridge を返す。auto は VS Code → standalone の順。
  * probe は例外を投げず結果で返す。

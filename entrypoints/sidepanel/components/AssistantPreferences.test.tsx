@@ -74,4 +74,13 @@ describe("AssistantPreferences post presets", () => {
     const html = render(0, "ja");
     expect(html).toContain("ポストのプリセット");
   });
+
+  it("names the target preset in every row action for screen readers", () => {
+    const html = render(2);
+    for (const action of ["Move up", "Move down", "Duplicate", "Delete"]) {
+      for (const name of ["Post 0", "Post 1"]) {
+        expect(html).toContain(`aria-label="${action}: ${name}"`);
+      }
+    }
+  });
 });

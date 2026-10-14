@@ -73,6 +73,7 @@ export function AssistantPreferences({
           useCommon: "共通の指示とプロフィールの指示を適用する",
           addPost: "プリセットを追加",
           duplicatePost: "複製",
+          copySuffix: "（コピー）",
           removePost: "削除",
           moveUp: "上へ",
           moveDown: "下へ",
@@ -108,6 +109,7 @@ export function AssistantPreferences({
           useCommon: "Apply global and profile instructions",
           addPost: "Add preset",
           duplicatePost: "Duplicate",
+          copySuffix: " (copy)",
           removePost: "Delete",
           moveUp: "Move up",
           moveDown: "Move down",
@@ -316,6 +318,7 @@ export function AssistantPreferences({
               <div className="flex flex-wrap gap-3 text-sm">
                 <button
                   type="button"
+                  aria-label={`${labels.moveUp}: ${preset.name}`}
                   disabled={index === 0}
                   className="text-blue-700 disabled:opacity-40"
                   onClick={() => movePost(index, -1)}
@@ -324,6 +327,7 @@ export function AssistantPreferences({
                 </button>
                 <button
                   type="button"
+                  aria-label={`${labels.moveDown}: ${preset.name}`}
                   disabled={index === value.posts.length - 1}
                   className="text-blue-700 disabled:opacity-40"
                   onClick={() => movePost(index, 1)}
@@ -332,6 +336,7 @@ export function AssistantPreferences({
                 </button>
                 <button
                   type="button"
+                  aria-label={`${labels.duplicatePost}: ${preset.name}`}
                   disabled={postsFull}
                   className="text-blue-700 disabled:opacity-40"
                   onClick={() =>
@@ -342,7 +347,10 @@ export function AssistantPreferences({
                         {
                           ...preset,
                           id: crypto.randomUUID(),
-                          name: `${preset.name} (copy)`.slice(0, 80),
+                          name: `${preset.name}${labels.copySuffix}`.slice(
+                            0,
+                            80,
+                          ),
                         },
                         ...value.posts.slice(index + 1),
                       ],
@@ -353,6 +361,7 @@ export function AssistantPreferences({
                 </button>
                 <button
                   type="button"
+                  aria-label={`${labels.removePost}: ${preset.name}`}
                   className="text-red-700"
                   onClick={() =>
                     onChange({
