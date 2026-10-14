@@ -2,8 +2,9 @@
 export const X_STANDARD_LIMIT = 280;
 export const X_LONG_LIMIT = 1000;
 const URL_WEIGHT = 23;
-const URL_PATTERN = /https?:\/\/[^\s]+/g;
-const URL_TRAILING = /[.,;:!?)\]}'"」』）、。！？]+$/u;
+// twitter-text と同様、URL は ASCII の URL 文字だけで終わらせる（直後の日本語を URL に含めない）
+const URL_PATTERN = /https?:\/\/[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]+/g;
+const URL_TRAILING = /[.,;:!?)\]}'"]+$/;
 const EMOJI_CLUSTER =
   /\p{Extended_Pictographic}|\p{Regional_Indicator}|\u20E3/u;
 

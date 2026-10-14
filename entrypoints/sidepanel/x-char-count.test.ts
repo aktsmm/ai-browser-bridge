@@ -32,6 +32,13 @@ describe("xWeightedLength", () => {
     expect(xWeightedLength("https://example.com.")).toBe(24);
   });
 
+  it("ends a URL at the first non-ASCII character", () => {
+    expect(xWeightedLength("詳細はhttps://example.com/xをご覧ください")).toBe(
+      6 + 23 + 14,
+    );
+    expect(xWeightedLength("(https://example.com/a?b=1&c=2)")).toBe(25);
+  });
+
   it("counts any emoji sequence as 2", () => {
     expect(xWeightedLength("👾")).toBe(2);
     expect(xWeightedLength("🙋🏽")).toBe(2);

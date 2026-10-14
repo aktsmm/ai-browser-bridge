@@ -1004,7 +1004,9 @@ export function Chat({
                             className="px-2 py-0.5 rounded bg-gray-100 hover:bg-gray-200 text-gray-700 focus-visible:ring-2 focus-visible:ring-blue-500"
                           >
                             {copiedBodyIndex === index
-                              ? "✓"
+                              ? language === "ja"
+                                ? "✓ コピーしました"
+                                : "✓ Copied"
                               : language === "ja"
                                 ? "投稿文をコピー"
                                 : "Copy post text"}
