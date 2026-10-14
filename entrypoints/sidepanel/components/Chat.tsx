@@ -991,7 +991,8 @@ export function Chat({
                                 ? "（超過）"
                                 : " (over)"
                               : ""}
-                            {weighted > X_STANDARD_LIMIT
+                            {weighted > X_STANDARD_LIMIT &&
+                            limit > X_STANDARD_LIMIT
                               ? language === "ja"
                                 ? "（280超は X Premium が必要）"
                                 : " (over 280 needs X Premium)"

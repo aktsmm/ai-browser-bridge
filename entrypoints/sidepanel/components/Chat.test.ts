@@ -485,6 +485,7 @@ describe("getQuickActions", () => {
     expect(html).toContain("Copy post text");
     expect(html).not.toContain("(over)");
     expect(render(280, "あ".repeat(141))).toContain("(over)");
+    expect(render(280, "あ".repeat(141))).not.toContain("needs X Premium");
     expect(render(1000, "あ".repeat(200))).toContain("needs X Premium");
     expect(render(undefined)).not.toContain("Copy post text");
   });

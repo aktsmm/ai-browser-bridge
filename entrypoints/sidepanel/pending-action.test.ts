@@ -4,6 +4,7 @@ import {
   claimPendingAction,
   getPendingActionId,
   getPendingActionTabId,
+  getPostPrompt,
   canDispatchPendingAction,
   describePendingWait,
   getSummarizeAndSavePrompt,
@@ -323,5 +324,40 @@ describe("normalizeCustomPrompts", () => {
     expect(new Set(ids).size).toBe(ids.length);
     expect(result[0].id).toBe("dup");
     expect(result[1].id).not.toBe("dup");
+  });
+});
+
+describe("getPostPrompt count rule", () => {
+  const tones = ["casual", "formal"] as const;
+  const lengths = [
+    ["short", 280],
+    ["long", 1000],
+  ] as const;
+
+  it("states the same weighted budget in every built-in variant", () => {
+    for (const lang of ["ja", "en"] as const) {
+      for (const tone of tones) {
+        for (const [length, limit] of lengths) {
+          const prompt = getPostPrompt(lang, tone, length);
+          expect(prompt, `${lang}/${tone}/${length}`).toContain(
+            lang === "ja" ? `全体${limit}以内` : `weighted ${limit}`,
+          );
+          expect(prompt).toContain(String(Math.floor(limit * 0.9)));
+        }
+      }
+    }
+  });
+
+  it("falls back to the plain budget only when the rule is off", () => {
+    for (const lang of ["ja", "en"] as const) {
+      for (const tone of tones) {
+        for (const [length] of lengths) {
+          const budget = length === "long" ? 500 : 140;
+          const prompt = getPostPrompt(lang, tone, length, undefined, "none");
+          expect(prompt).toContain(String(budget));
+          expect(prompt).not.toMatch(/重み付き|weighted/);
+        }
+      }
+    }
   });
 });
