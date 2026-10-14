@@ -403,10 +403,16 @@ try {
         profiles: [{ id: "default", name: "Fixture", instructions: "" }],
         selectedProfileId: "default",
         mode: "read-only",
-        post: {
-          name: "Fixture Post",
-          instructions: "Fixture post instruction",
-        },
+        posts: [
+          {
+            id: "fixture",
+            name: "Fixture Post",
+            instructions: "Fixture post instruction",
+            tone: "formal",
+            length: "short",
+            useCommonInstructions: true,
+          },
+        ],
       },
     });
   }, bridgePort);
@@ -419,7 +425,16 @@ try {
   assert.equal(typeof sourceTabId, "number");
   await worker.evaluate(
     async (tabId) =>
-      chrome.storage.local.set({ pendingAction: { type: "post", tabId } }),
+      chrome.storage.local.set({
+        pendingAction: {
+          type: "post",
+          tone: "formal",
+          length: "short",
+          instructions: "Fixture post instruction",
+          useCommonInstructions: true,
+          tabId,
+        },
+      }),
     sourceTabId,
   );
   const panel = await context.newPage();
