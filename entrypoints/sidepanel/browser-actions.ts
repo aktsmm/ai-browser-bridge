@@ -1,6 +1,7 @@
 import type { BrowserAction, FormField } from "./types";
 import { BRIDGE_CLIENT_HEADERS } from "./constants";
 import { normalizeServerPort } from "./server-port";
+import { RESOLVED_BRIDGE_STORAGE_KEY } from "./bridge-resolution";
 import { normalizeDownloadRelativePath } from "./save-path";
 import { isValidDownloadId } from "./download-id";
 import { getEvaluateBlockedMessage } from "./evaluate-policy";
@@ -52,9 +53,15 @@ function resolveScriptResultMessage(result: unknown, fallback: string): string {
 async function getBridgeBaseUrl(): Promise<string> {
   return await new Promise((resolve) => {
     chrome.storage.local.get(
-      ["serverPort"],
-      (result: { serverPort?: number }) => {
-        resolve(`http://localhost:${normalizeServerPort(result.serverPort)}`);
+      ["serverPort", RESOLVED_BRIDGE_STORAGE_KEY],
+      (result: { serverPort?: number; resolvedBridgeBaseUrl?: string }) => {
+        // App が /health で解決した接続先を優先し、未解決なら VS Code ポートに戻す。
+        resolve(
+          typeof result.resolvedBridgeBaseUrl === "string" &&
+            result.resolvedBridgeBaseUrl
+            ? result.resolvedBridgeBaseUrl
+            : `http://localhost:${normalizeServerPort(result.serverPort)}`,
+        );
       },
     );
   });

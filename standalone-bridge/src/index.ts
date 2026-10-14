@@ -87,6 +87,8 @@ const DEFAULT_ALLOWED_EXTENSION_ORIGINS = [
 ];
 const MAX_PAGE_CONTENT_LENGTH = 50_000;
 const MAX_ATTACHMENT_COUNT = 5;
+// VS Code 拡張の既定 3210 と衝突しないよう分ける。
+export const DEFAULT_STANDALONE_PORT = "3211";
 export const MAX_CHAT_MESSAGES = 200;
 export const MAX_CHAT_MESSAGE_LENGTH = 100_000;
 export const MAX_CHAT_HISTORY_LENGTH = 500_000;
@@ -1432,7 +1434,9 @@ function packageVersion(): string {
   }
 }
 function parseArgs(argv: string[]) {
-  let port = Number(process.env.COPILOT_BROWSER_BRIDGE_PORT || "3210");
+  let port = Number(
+    process.env.COPILOT_BROWSER_BRIDGE_PORT || DEFAULT_STANDALONE_PORT,
+  );
   let workspaceRoot = path.resolve(
     process.env.COPILOT_BROWSER_BRIDGE_WORKSPACE_ROOT || process.cwd(),
   );
@@ -1456,7 +1460,7 @@ function parseArgs(argv: string[]) {
       playwrightMcpEndpoint = argv[++i];
     else if (argv[i] === "--help" || argv[i] === "-h") {
       console.log(
-        "Usage: npm run start -- --port 3210 --workspace-root <path> [--allow-origin chrome-extension://...] [--playwright-mcp-endpoint http://127.0.0.1:3001/call]",
+        "Usage: npm run start -- --port 3211 --workspace-root <path> [--allow-origin chrome-extension://...] [--playwright-mcp-endpoint http://127.0.0.1:3001/call]",
       );
       process.exit(0);
     }
@@ -1480,7 +1484,17 @@ if (
     options.origins,
     options.playwrightMcpEndpoint,
   );
-  await server.start();
+  try {
+    await server.start();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EADDRINUSE") {
+      console.error(
+        `Port ${options.port} is already in use. Another bridge may already be running (use --port to change).`,
+      );
+      process.exit(1);
+    }
+    throw error;
+  }
   const shutdown = () => {
     server.stop();
     process.exit(0);

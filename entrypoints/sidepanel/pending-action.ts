@@ -397,6 +397,9 @@ export type PendingAction = (
       type: "post";
       tone?: PostTone;
       length?: PostLength;
+      /** プリセットのカスタム指示。空なら tone / length の組み込みプロンプト。 */
+      instructions?: string;
+      useCommonInstructions?: boolean;
       tabId?: number;
       url?: string;
       title?: string;
@@ -461,7 +464,11 @@ export function toPendingPrompt(
 
   if (candidate.type === "post") {
     const post = candidate as Extract<PendingAction, { type: "post" }>;
-    return getPostPrompt(lang, post.tone, post.length, post.url);
+    const instructions =
+      typeof post.instructions === "string" ? post.instructions.trim() : "";
+    return (
+      instructions || getPostPrompt(lang, post.tone, post.length, post.url)
+    );
   }
 
   return null;

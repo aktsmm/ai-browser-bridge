@@ -29,7 +29,20 @@ import {
 import type { Language } from "./i18n";
 import { t } from "./i18n";
 import { BRIDGE_CLIENT_HEADERS } from "./constants";
-import { DEFAULT_SERVER_PORT, normalizeServerPort } from "./server-port";
+import {
+  DEFAULT_SERVER_PORT,
+  DEFAULT_STANDALONE_SERVER_PORT,
+  normalizeServerPort,
+} from "./server-port";
+import {
+  RESOLVED_BRIDGE_STORAGE_KEY,
+  bridgeBaseUrl,
+  normalizeBridgeMode,
+  resolveBridge,
+  type BridgeKind,
+  type BridgeMode,
+  type BridgeProbeResult,
+} from "./bridge-resolution";
 import {
   DEFAULT_AGENT_LOOPS,
   clampAgentLoops,
@@ -388,6 +401,12 @@ export default function App() {
   const [maxAgentLoops, setMaxAgentLoops] = useState(DEFAULT_AGENT_LOOPS);
   const [operationMode, setOperationMode] = useState<OperationMode>("hybrid");
   const [serverPort, setServerPort] = useState(DEFAULT_SERVER_PORT);
+  const [standaloneServerPort, setStandaloneServerPort] = useState(
+    DEFAULT_STANDALONE_SERVER_PORT,
+  );
+  const [bridgeMode, setBridgeMode] = useState<BridgeMode>("auto");
+  const [bridgeKind, setBridgeKind] = useState<BridgeKind | null>(null);
+  const resolvedBaseUrlRef = useRef<string | null>(null);
   const [allowHighRiskActions, setAllowHighRiskActions] = useState(true);
   const [allowEvaluateAction, setAllowEvaluateAction] = useState(
     defaultAllowEvaluateAction(),
@@ -423,7 +442,13 @@ export default function App() {
     const pendingType = (action as PendingAction).type;
     pendingTaskRef.current =
       pendingType === "post"
-        ? { kind: "post", instructions: prompt }
+        ? {
+            kind: "post",
+            instructions: prompt,
+            useCommonInstructions: (
+              action as { useCommonInstructions?: boolean }
+            ).useCommonInstructions,
+          }
         : pendingType === "customPrompt"
           ? { kind: "custom", instructions: prompt }
           : { kind: "summary" };
@@ -450,6 +475,8 @@ export default function App() {
         "maxAgentLoops",
         "operationMode",
         "serverPort",
+        "standaloneServerPort",
+        "bridgeMode",
         "allowHighRiskActions",
         "allowEvaluateAction",
         "saveDestinationMode",
@@ -467,6 +494,8 @@ export default function App() {
         maxAgentLoops?: number;
         operationMode?: OperationMode;
         serverPort?: number;
+        standaloneServerPort?: number;
+        bridgeMode?: BridgeMode;
         allowHighRiskActions?: boolean;
         allowEvaluateAction?: boolean;
         saveDestinationMode?: SaveDestinationMode;
@@ -476,6 +505,9 @@ export default function App() {
         pendingAction?: PendingAction;
       }) => {
         let effectiveServerPort = DEFAULT_SERVER_PORT;
+        let effectiveStandalonePort = DEFAULT_STANDALONE_SERVER_PORT;
+        const effectiveBridgeMode = normalizeBridgeMode(result.bridgeMode);
+        setBridgeMode(effectiveBridgeMode);
         setAssistantSettings(
           normalizeAssistantSettings(result.assistantSettingsV1),
         );
@@ -513,6 +545,13 @@ export default function App() {
           effectiveServerPort = normalizeServerPort(result.serverPort);
           setServerPort(effectiveServerPort);
         }
+        if (result.standaloneServerPort !== undefined) {
+          effectiveStandalonePort = normalizeServerPort(
+            result.standaloneServerPort,
+            DEFAULT_STANDALONE_SERVER_PORT,
+          );
+          setStandaloneServerPort(effectiveStandalonePort);
+        }
         if (typeof result.allowHighRiskActions === "boolean") {
           setAllowHighRiskActions(result.allowHighRiskActions);
         }
@@ -542,7 +581,11 @@ export default function App() {
         queuePendingAction(result.pendingAction, effectiveLanguage);
 
         settingsLoadedRef.current = true;
-        void checkConnection(effectiveServerPort);
+        void checkConnection({
+          vscodePort: effectiveServerPort,
+          standalonePort: effectiveStandalonePort,
+          mode: effectiveBridgeMode,
+        });
       },
     );
   }, []);
@@ -597,6 +640,8 @@ export default function App() {
       maxAgentLoops,
       operationMode,
       serverPort,
+      standaloneServerPort,
+      bridgeMode,
       allowHighRiskActions,
       allowEvaluateAction,
       saveDestinationMode,
@@ -612,6 +657,8 @@ export default function App() {
     maxAgentLoops,
     operationMode,
     serverPort,
+    standaloneServerPort,
+    bridgeMode,
     allowHighRiskActions,
     allowEvaluateAction,
     saveDestinationMode,
@@ -624,10 +671,10 @@ export default function App() {
     setEvaluateActionEnabled(allowEvaluateAction);
   }, [allowEvaluateAction]);
 
-  const getBridgeBaseUrl = (overridePort?: number) => {
-    const targetPort = normalizeServerPort(overridePort ?? serverPort);
-    return `http://127.0.0.1:${targetPort}`;
-  };
+  const getBridgeBaseUrl = (overrideBaseUrl?: string) =>
+    overrideBaseUrl ??
+    resolvedBaseUrlRef.current ??
+    bridgeBaseUrl(normalizeServerPort(serverPort));
 
   const getExtensionOrigin = () => {
     return chrome.runtime?.id
@@ -635,65 +682,91 @@ export default function App() {
       : "chrome-extension://unknown";
   };
 
-  const checkConnection = async (overridePort?: number) => {
-    console.log("checkConnection called");
+  const probeBridgeHealth = async (
+    baseUrl: string,
+  ): Promise<BridgeProbeResult> => {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
+    const timeout = setTimeout(() => controller.abort(), 3000);
     try {
-      const response = await fetch(`${getBridgeBaseUrl(overridePort)}/health`, {
+      const response = await fetch(`${baseUrl}/health`, {
         headers: BRIDGE_CLIENT_HEADERS,
         signal: controller.signal,
       });
-      const connected = response.ok;
-      console.log("Connection status:", connected);
-      setIsConnected(connected);
-      if (connected) {
-        setConnectionErrorDetail(null);
-        setModelFetchFailed(false);
-        void fetchAvailableModels(overridePort);
-        void fetchBridgeCapabilities(overridePort);
-      } else {
-        setAvailableModels([]);
-        setBridgeCapabilities(null);
-        setCapabilitiesErrorDetail(null);
-        setModelFetchFailed(false);
-        setModelFetchErrorDetail(null);
-        setConnectionErrorDetail(
-          formatConnectionFailureDetail({
-            port: normalizeServerPort(overridePort ?? serverPort),
-            statusCode: response.status,
-            statusText: response.statusText,
-            language,
-          }),
-        );
-      }
+      return response.ok
+        ? { ok: true }
+        : {
+            ok: false,
+            status: { code: response.status, text: response.statusText },
+          };
     } catch (error) {
-      console.log("Connection failed:", error);
-      setIsConnected(false);
-      setAvailableModels([]);
-      setBridgeCapabilities(null);
-      setCapabilitiesErrorDetail(null);
-      setModelFetchFailed(false);
-      setModelFetchErrorDetail(null);
-      setConnectionErrorDetail(
-        formatConnectionFailureDetail({
-          port: normalizeServerPort(overridePort ?? serverPort),
-          error: error instanceof Error ? error.message : String(error),
-          language,
-        }),
-      );
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
     } finally {
       clearTimeout(timeout);
     }
   };
 
-  const fetchAvailableModels = async (overridePort?: number) => {
+  const checkConnection = async (overrides?: {
+    vscodePort?: number;
+    standalonePort?: number;
+    mode?: BridgeMode;
+  }) => {
+    console.log("checkConnection called");
+    const vscodePort = normalizeServerPort(overrides?.vscodePort ?? serverPort);
+    const standalonePort = normalizeServerPort(
+      overrides?.standalonePort ?? standaloneServerPort,
+      DEFAULT_STANDALONE_SERVER_PORT,
+    );
+    const resolution = await resolveBridge({
+      mode: overrides?.mode ?? bridgeMode,
+      vscodePort,
+      standalonePort,
+      probe: probeBridgeHealth,
+    });
+    console.log("Connection status:", resolution.ok);
+    if (resolution.ok) {
+      const { baseUrl, kind } = resolution.bridge;
+      resolvedBaseUrlRef.current = baseUrl;
+      void chrome.storage.local.set({ [RESOLVED_BRIDGE_STORAGE_KEY]: baseUrl });
+      setBridgeKind(kind);
+      setIsConnected(true);
+      setConnectionErrorDetail(null);
+      setModelFetchFailed(false);
+      void fetchAvailableModels(baseUrl);
+      void fetchBridgeCapabilities(baseUrl);
+      return;
+    }
+
+    resolvedBaseUrlRef.current = null;
+    void chrome.storage.local.remove(RESOLVED_BRIDGE_STORAGE_KEY);
+    setBridgeKind(null);
+    setIsConnected(false);
+    setAvailableModels([]);
+    setBridgeCapabilities(null);
+    setCapabilitiesErrorDetail(null);
+    setModelFetchFailed(false);
+    setModelFetchErrorDetail(null);
+    const { failure } = resolution;
+    setConnectionErrorDetail(
+      formatConnectionFailureDetail({
+        ports: failure.triedPorts,
+        error: failure.lastError,
+        statusCode: failure.lastStatus?.code,
+        statusText: failure.lastStatus?.text,
+        language,
+      }),
+    );
+  };
+
+  const fetchAvailableModels = async (overrideBaseUrl?: string) => {
     if (modelFetchInFlightRef.current) return;
     modelFetchInFlightRef.current = true;
     setIsFetchingModels(true);
     try {
       const result = await fetchModelsWithRetry({
-        baseUrl: getBridgeBaseUrl(overridePort),
+        baseUrl: getBridgeBaseUrl(overrideBaseUrl),
         headers: BRIDGE_CLIENT_HEADERS,
         extensionOrigin: getExtensionOrigin(),
       });
@@ -743,13 +816,13 @@ export default function App() {
     }
   };
 
-  const fetchBridgeCapabilities = async (overridePort?: number) => {
+  const fetchBridgeCapabilities = async (overrideBaseUrl?: string) => {
     if (capabilityFetchInFlightRef.current) return;
     capabilityFetchInFlightRef.current = true;
     setIsRefreshingCapabilities(true);
     try {
       const response = await fetch(
-        `${getBridgeBaseUrl(overridePort)}/capabilities`,
+        `${getBridgeBaseUrl(overrideBaseUrl)}/capabilities`,
         { headers: BRIDGE_CLIENT_HEADERS },
       );
 
@@ -799,7 +872,23 @@ export default function App() {
     const normalizedPort = normalizeServerPort(nextPort);
     setServerPort(normalizedPort);
     chrome.storage.local.set({ serverPort: normalizedPort });
-    void checkConnection(normalizedPort);
+    void checkConnection({ vscodePort: normalizedPort });
+  };
+
+  const handleStandaloneServerPortChange = (nextPort: number) => {
+    const normalizedPort = normalizeServerPort(
+      nextPort,
+      DEFAULT_STANDALONE_SERVER_PORT,
+    );
+    setStandaloneServerPort(normalizedPort);
+    chrome.storage.local.set({ standaloneServerPort: normalizedPort });
+    void checkConnection({ standalonePort: normalizedPort });
+  };
+
+  const handleBridgeModeChange = (nextMode: BridgeMode) => {
+    setBridgeMode(nextMode);
+    chrome.storage.local.set({ bridgeMode: nextMode });
+    void checkConnection({ mode: nextMode });
   };
 
   const postFileOperation = async (
@@ -2917,6 +3006,14 @@ export default function App() {
             aria-label={isConnected ? "Connected" : "Disconnected"}
             className={`w-2 h-2 shrink-0 rounded-full ${isConnected ? "bg-green-500" : "bg-red-500"}`}
           />
+          {isConnected && bridgeKind && (
+            <span
+              className="text-xs text-gray-600 border rounded px-1"
+              title={t("bridgeModeCurrent", language)}
+            >
+              {bridgeKind === "vscode" ? "VS Code" : "standalone"}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-1">
           <button
@@ -3081,6 +3178,11 @@ export default function App() {
           onOperationModeChange={setOperationMode}
           serverPort={serverPort}
           onServerPortChange={handleServerPortChange}
+          standaloneServerPort={standaloneServerPort}
+          onStandaloneServerPortChange={handleStandaloneServerPortChange}
+          bridgeMode={bridgeMode}
+          onBridgeModeChange={handleBridgeModeChange}
+          bridgeKind={bridgeKind}
           allowHighRiskActions={allowHighRiskActions}
           onAllowHighRiskActionsChange={setAllowHighRiskActions}
           allowEvaluateAction={allowEvaluateAction}
@@ -3275,11 +3377,7 @@ export default function App() {
                     : "Check bridge compatibility in Settings"
                   : undefined
           }
-          postName={
-            language === "ja" && assistantSettings.post.name === "Custom Post"
-              ? "カスタム投稿"
-              : assistantSettings.post.name
-          }
+          postPresets={assistantSettings.posts}
           messages={messages}
           isLoading={isLoading}
           onSendMessage={sendMessage}

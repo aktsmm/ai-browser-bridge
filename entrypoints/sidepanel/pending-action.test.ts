@@ -161,6 +161,24 @@ describe("toPendingPrompt", () => {
     expect(ja).not.toContain("500字以内");
   });
 
+  it("uses a post preset's own instructions instead of the built-in prompt", () => {
+    const custom = toPendingPrompt(
+      {
+        type: "post",
+        tone: "casual",
+        length: "short",
+        instructions: "  Write for Azure architects  ",
+      },
+      "ja",
+    );
+    expect(custom).toBe("Write for Azure architects");
+    const blank = toPendingPrompt(
+      { type: "post", tone: "casual", length: "short", instructions: "   " },
+      "ja",
+    );
+    expect(blank).toContain("140字以内");
+  });
+
   it("selects the long character budget for long posts", () => {
     const ja = toPendingPrompt(
       { type: "post", tone: "formal", length: "long" },

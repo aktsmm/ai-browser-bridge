@@ -56,7 +56,7 @@ Chrome APIはモックせず、ストレージ、タブ・ドキュメント指�
 
 ## 🎮 使い方
 
-1. ローカル bridge を起動（VS Code 拡張の自動起動、または `standalone-bridge` で `npm run start -- --port 3210 --workspace-root ..`）
+1. ローカル bridge を起動（VS Code 拡張の自動起動、または `standalone-bridge` で `npm run start -- --port 3211 --workspace-root ..`。既定ポートは 3211 で、拡張は VS Code bridge (3210) を優先して不通なら standalone を使います）
 2. Chrome拡張機能のサイドパネルを開く
 3. 任意のWebページで質問や操作指示を入力
 

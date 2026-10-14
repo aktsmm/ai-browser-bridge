@@ -11,49 +11,22 @@ import {
 } from "./sidepanel/display-edit-permission";
 import {
   ASSISTANT_SETTINGS_KEY,
+  DEFAULT_POST_PRESETS,
   normalizeAssistantSettings,
+  type PostPreset,
 } from "./sidepanel/assistant-settings";
 import {
   CUSTOM_PROMPTS_STORAGE_KEY,
   DEFAULT_CUSTOM_PROMPTS,
   normalizeCustomPrompts,
 } from "./sidepanel/pending-action";
-import type {
-  CustomPrompt,
-  PendingAction,
-  PostLength,
-  PostTone,
-} from "./sidepanel/pending-action";
+import type { CustomPrompt, PendingAction } from "./sidepanel/pending-action";
 
 /** カスタムプロンプトのコンテキストメニュー id 接頭辞。 */
 export const CUSTOM_PROMPT_MENU_PREFIX = "customPrompt:";
 
-/** ポスト作成サブメニューの子 id → トーン/長さの対応。 */
-export const POST_MENU_ITEMS: Record<
-  string,
-  { tone: PostTone; length: PostLength; title: string }
-> = {
-  postCasualShort: {
-    tone: "casual",
-    length: "short",
-    title: "カジュアル（140字）",
-  },
-  postCasualLong: {
-    tone: "casual",
-    length: "long",
-    title: "カジュアル（500字・具体例つき）",
-  },
-  postFormalShort: {
-    tone: "formal",
-    length: "short",
-    title: "フォーマル（140字）",
-  },
-  postFormalLong: {
-    tone: "formal",
-    length: "long",
-    title: "フォーマル（500字・具体例つき）",
-  },
-};
+/** ポストプリセットのコンテキストメニュー id 接頭辞。 */
+export const POST_PRESET_MENU_PREFIX = "postPreset:";
 
 /** ポスト作成サブメニューの親 id。 */
 export const POST_PARENT_MENU_ID = "postAboutPage";
@@ -68,17 +41,13 @@ export type ContextMenuSpec = {
 
 /**
  * 登録すべきコンテキストメニュー項目の一覧を純粋関数として返す。
- * 静的項目（選択質問 / 要約 / ポスト親 + 子4）＋ 有効なカスタムプロンプトを、
+ * 静的項目（選択質問 / 要約 / ポスト親）＋ ポストプリセット（子）＋ 有効なカスタムプロンプトを、
  * 実際に `create` する順序で返す（親は子より前）。副作用を持たないためテスト可能。
  */
 export function buildContextMenuSpecs(
   customPrompts: CustomPrompt[] = [],
-  postName?: string,
-  customPost = false,
-  language: "ja" | "en" = "ja",
+  postPresets: readonly PostPreset[] = DEFAULT_POST_PRESETS,
 ): ContextMenuSpec[] {
-  const displayedPostName =
-    postName === "Custom Post" && language === "ja" ? "カスタム投稿" : postName;
   const specs: ContextMenuSpec[] = [
     {
       id: "askAboutSelection",
@@ -90,27 +59,22 @@ export function buildContextMenuSpecs(
       title: "このページを要約",
       contexts: ["page"],
     },
-    {
-      id: POST_PARENT_MENU_ID,
-      title: displayedPostName?.trim() || "このページでポストを作成",
-      contexts: ["page"],
-    },
   ];
 
-  if (customPost)
+  if (postPresets.length > 0) {
     specs.push({
-      id: "postConfigured",
-      parentId: POST_PARENT_MENU_ID,
-      title: displayedPostName?.trim() || "Custom Post",
+      id: POST_PARENT_MENU_ID,
+      title: "このページでポストを作成",
       contexts: ["page"],
     });
-  for (const [id, { title }] of Object.entries(POST_MENU_ITEMS)) {
-    specs.push({
-      id,
-      parentId: POST_PARENT_MENU_ID,
-      title,
-      contexts: ["page"],
-    });
+    for (const preset of postPresets) {
+      specs.push({
+        id: `${POST_PRESET_MENU_PREFIX}${preset.id}`,
+        parentId: POST_PARENT_MENU_ID,
+        title: preset.name.trim() || "Post",
+        contexts: ["page"],
+      });
+    }
   }
 
   for (const prompt of customPrompts) {
@@ -131,12 +95,14 @@ type ContextMenuDeps = {
   setPendingAction: (pendingAction: PendingAction) => Promise<void>;
   openSidePanel: (windowId: number) => Promise<void>;
   loadCustomPrompts: () => Promise<CustomPrompt[]>;
+  loadPostPresets: () => Promise<PostPreset[]>;
 };
 
 export function buildPendingActionFromContextMenu(
   info: Pick<chrome.contextMenus.OnClickData, "menuItemId" | "selectionText">,
   tab?: Pick<chrome.tabs.Tab, "id" | "url" | "title">,
   customPrompts: CustomPrompt[] = [],
+  postPresets: readonly PostPreset[] = [],
 ): PendingAction | null {
   if (info.menuItemId === "askAboutSelection" && info.selectionText) {
     return {
@@ -157,19 +123,20 @@ export function buildPendingActionFromContextMenu(
     };
   }
 
-  if (info.menuItemId === "postConfigured") {
-    return { type: "post", tabId: tab?.id, url: tab?.url, title: tab?.title };
-  }
-
   if (
     typeof info.menuItemId === "string" &&
-    info.menuItemId in POST_MENU_ITEMS
+    info.menuItemId.startsWith(POST_PRESET_MENU_PREFIX)
   ) {
-    const { tone, length } = POST_MENU_ITEMS[info.menuItemId];
+    const id = info.menuItemId.slice(POST_PRESET_MENU_PREFIX.length);
+    const preset = postPresets.find((item) => item.id === id);
+    if (!preset) return null;
+    const instructions = preset.instructions.trim();
     return {
       type: "post",
-      tone,
-      length,
+      tone: preset.tone,
+      length: preset.length,
+      ...(instructions ? { instructions } : {}),
+      useCommonInstructions: preset.useCommonInstructions,
       tabId: tab?.id,
       url: tab?.url,
       title: tab?.title,
@@ -208,11 +175,16 @@ export async function handleContextMenuClick(
     typeof info.menuItemId === "string" &&
     info.menuItemId.startsWith(CUSTOM_PROMPT_MENU_PREFIX);
   const customPrompts = isCustomPrompt ? await deps.loadCustomPrompts() : [];
+  const isPostPreset =
+    typeof info.menuItemId === "string" &&
+    info.menuItemId.startsWith(POST_PRESET_MENU_PREFIX);
+  const postPresets = isPostPreset ? await deps.loadPostPresets() : [];
 
   const pendingAction = buildPendingActionFromContextMenu(
     info,
     tab,
     customPrompts,
+    postPresets,
   );
   if (!pendingAction) return;
 
@@ -264,26 +236,25 @@ export default defineBackground({
       }
     };
 
-    // コンテキストメニューを（静的 + カスタムプロンプト）再構築する
+    const loadPostPresets = async (): Promise<PostPreset[]> => {
+      try {
+        const stored = await browser.storage.local.get(ASSISTANT_SETTINGS_KEY);
+        return normalizeAssistantSettings(stored[ASSISTANT_SETTINGS_KEY]).posts;
+      } catch (error) {
+        console.error("AI Browser Bridge: Failed to load post presets", error);
+        return [];
+      }
+    };
+
+    // コンテキストメニューを（静的 + ポストプリセット + カスタムプロンプト）再構築する
     const setupContextMenus = async (): Promise<void> => {
       await new Promise<void>((resolve) => {
         browser.contextMenus.removeAll(() => resolve());
       });
 
       const customPrompts = await loadCustomPrompts();
-      const stored = await browser.storage.local.get([
-        ASSISTANT_SETTINGS_KEY,
-        "language",
-      ]);
-      const assistant = normalizeAssistantSettings(
-        stored[ASSISTANT_SETTINGS_KEY],
-      );
-      for (const spec of buildContextMenuSpecs(
-        customPrompts,
-        assistant.post.name,
-        true,
-        stored.language === "en" ? "en" : "ja",
-      )) {
+      const postPresets = await loadPostPresets();
+      for (const spec of buildContextMenuSpecs(customPrompts, postPresets)) {
         browser.contextMenus.create(spec);
       }
     };
@@ -307,9 +278,7 @@ export default defineBackground({
     browser.storage.onChanged.addListener((changes, areaName) => {
       if (
         areaName === "local" &&
-        (changes[CUSTOM_PROMPTS_STORAGE_KEY] ||
-          changes[ASSISTANT_SETTINGS_KEY] ||
-          changes.language)
+        (changes[CUSTOM_PROMPTS_STORAGE_KEY] || changes[ASSISTANT_SETTINGS_KEY])
       ) {
         void setupContextMenus();
       }
@@ -322,6 +291,7 @@ export default defineBackground({
           setPendingAction,
           openSidePanel,
           loadCustomPrompts,
+          loadPostPresets,
         });
       },
     );

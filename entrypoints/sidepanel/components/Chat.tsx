@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
-import type { TaskOptions } from "../assistant-settings";
+import type { PostPreset, TaskOptions } from "../assistant-settings";
+import { buildPostPresetPrompt } from "../assistant-settings";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
@@ -307,7 +308,7 @@ interface ChatProps {
     attachments?: ChatAttachment[],
     task?: TaskOptions,
   ) => void;
-  postName?: string;
+  postPresets?: PostPreset[];
   onClearMessages: () => void;
   onStopGeneration: () => void;
   language: Language;
@@ -360,7 +361,7 @@ export function Chat({
   onStopGeneration,
   language,
   customPrompts = [],
-  postName = "Custom Post",
+  postPresets = [],
   onSaveMarkdown,
   onSaveBlogDraft,
 }: ChatProps) {
@@ -1129,25 +1130,39 @@ export function Chat({
               : "Reading attachments..."}
           </div>
         )}
-        <button
-          type="button"
-          disabled={isLoading || Boolean(disabledReason) || readingAttachments}
-          className="mb-2 text-sm text-blue-700 break-words disabled:opacity-40"
-          onClick={() =>
-            onSendMessage(
-              language === "ja"
-                ? "現在のページについて投稿文を作成してください。"
-                : "Draft a post about the current page.",
-              [],
-              {
-                kind: "post",
-                instructions: getPostPrompt(language),
-              },
-            )
-          }
-        >
-          {postName}
-        </button>
+        {postPresets.length > 0 && (
+          <div
+            role="group"
+            aria-label={language === "ja" ? "ポストを作成" : "Create a post"}
+            className="mb-2 flex flex-wrap gap-x-3 gap-y-1"
+          >
+            {postPresets.map((preset) => (
+              <button
+                key={preset.id}
+                type="button"
+                disabled={
+                  isLoading || Boolean(disabledReason) || readingAttachments
+                }
+                className="text-sm text-blue-700 break-words disabled:opacity-40"
+                onClick={() =>
+                  onSendMessage(
+                    language === "ja"
+                      ? "現在のページについて投稿文を作成してください。"
+                      : "Draft a post about the current page.",
+                    [],
+                    {
+                      kind: "post",
+                      instructions: buildPostPresetPrompt(preset, language),
+                      useCommonInstructions: preset.useCommonInstructions,
+                    },
+                  )
+                }
+              >
+                {preset.name}
+              </button>
+            ))}
+          </div>
+        )}
         {pendingAttachments.length > 0 && (
           <div className="mb-3 rounded border border-gray-200 bg-gray-50 p-3">
             <div className="mb-2 text-xs font-medium text-gray-600">

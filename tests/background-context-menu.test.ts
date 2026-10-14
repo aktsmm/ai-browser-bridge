@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { DEFAULT_POST_PRESETS } from "../entrypoints/sidepanel/assistant-settings";
 
 type BackgroundModule = typeof import("../entrypoints/background");
 
@@ -39,39 +40,45 @@ describe("background context menu actions", () => {
     });
   });
 
-  it("builds post pending actions from the page context submenu", () => {
+  it("builds post pending actions from a preset menu item", () => {
     expect(
       backgroundModule.buildPendingActionFromContextMenu(
-        { menuItemId: "postFormalLong" },
+        { menuItemId: "postPreset:formal-long" },
         { id: 789, url: "https://example.com/post", title: "Post" },
+        [],
+        DEFAULT_POST_PRESETS,
       ),
     ).toEqual({
       type: "post",
       tone: "formal",
       length: "long",
+      useCommonInstructions: true,
       tabId: 789,
       url: "https://example.com/post",
       title: "Post",
     });
   });
 
-  it("maps every post submenu item to its tone and length", () => {
+  it("maps every built-in preset to its tone and length", () => {
     const cases = [
-      { id: "postCasualShort", tone: "casual", length: "short" },
-      { id: "postCasualLong", tone: "casual", length: "long" },
-      { id: "postFormalShort", tone: "formal", length: "short" },
-      { id: "postFormalLong", tone: "formal", length: "long" },
+      { id: "casual-short", tone: "casual", length: "short" },
+      { id: "casual-long", tone: "casual", length: "long" },
+      { id: "formal-short", tone: "formal", length: "short" },
+      { id: "formal-long", tone: "formal", length: "long" },
     ] as const;
     for (const { id, tone, length } of cases) {
       expect(
         backgroundModule.buildPendingActionFromContextMenu(
-          { menuItemId: id },
+          { menuItemId: `postPreset:${id}` },
           { id: 1, url: "https://example.com", title: "Example" },
+          [],
+          DEFAULT_POST_PRESETS,
         ),
       ).toEqual({
         type: "post",
         tone,
         length,
+        useCommonInstructions: true,
         tabId: 1,
         url: "https://example.com",
         title: "Example",
@@ -79,11 +86,50 @@ describe("background context menu actions", () => {
     }
   });
 
-  it("does not build a post action from the parent menu id alone", () => {
+  it("carries only the clicked preset's own instructions and opt-out", () => {
+    const presets = [
+      { ...DEFAULT_POST_PRESETS[0], id: "mine", instructions: "  Azure  " },
+      {
+        ...DEFAULT_POST_PRESETS[1],
+        id: "plain",
+        useCommonInstructions: false,
+      },
+    ];
+    const tab = { id: 1, url: "https://example.com", title: "Example" };
+    expect(
+      backgroundModule.buildPendingActionFromContextMenu(
+        { menuItemId: "postPreset:mine" },
+        tab,
+        [],
+        presets,
+      ),
+    ).toMatchObject({ instructions: "Azure", useCommonInstructions: true });
+    const plain = backgroundModule.buildPendingActionFromContextMenu(
+      { menuItemId: "postPreset:plain" },
+      tab,
+      [],
+      presets,
+    );
+    expect(plain).toMatchObject({ useCommonInstructions: false });
+    expect(plain).not.toHaveProperty("instructions");
+  });
+
+  it("ignores unknown preset ids and does not build from the parent id", () => {
+    const tab = { id: 789, url: "https://example.com/post", title: "Post" };
+    expect(
+      backgroundModule.buildPendingActionFromContextMenu(
+        { menuItemId: "postPreset:missing" },
+        tab,
+        [],
+        DEFAULT_POST_PRESETS,
+      ),
+    ).toBeNull();
     expect(
       backgroundModule.buildPendingActionFromContextMenu(
         { menuItemId: "postAboutPage" },
-        { id: 789, url: "https://example.com/post", title: "Post" },
+        tab,
+        [],
+        DEFAULT_POST_PRESETS,
       ),
     ).toBeNull();
   });
@@ -139,6 +185,7 @@ describe("background context menu actions", () => {
         setPendingAction,
         openSidePanel,
         loadCustomPrompts: vi.fn(async () => []),
+        loadPostPresets: vi.fn(async () => []),
       },
     );
 
@@ -162,6 +209,7 @@ describe("background context menu actions", () => {
         setPendingAction,
         openSidePanel,
         loadCustomPrompts: vi.fn(async () => []),
+        loadPostPresets: vi.fn(async () => []),
       },
     );
 
@@ -171,36 +219,69 @@ describe("background context menu actions", () => {
 });
 
 describe("buildContextMenuSpecs", () => {
-  it("localizes the default custom post name without changing saved names", () => {
-    const japanese = backgroundModule.buildContextMenuSpecs(
-      [],
-      "Custom Post",
-      true,
-      "ja",
+  it("loads preset instructions from storage only when a preset is clicked", async () => {
+    const loadPostPresets = vi.fn(async () => [
+      { ...DEFAULT_POST_PRESETS[0], id: "mine", instructions: "Azure" },
+    ]);
+    const loadCustomPrompts = vi.fn(async () => []);
+    const setPendingAction = vi.fn(async () => undefined);
+    const deps = {
+      setPendingAction,
+      openSidePanel: vi.fn(async () => undefined),
+      loadCustomPrompts,
+      loadPostPresets,
+    };
+    const tab = { id: 1, windowId: 9, url: "https://example.com" };
+
+    await backgroundModule.handleContextMenuClick(
+      { menuItemId: "summarizePage" } as chrome.contextMenus.OnClickData,
+      tab as chrome.tabs.Tab,
+      deps,
     );
-    expect(japanese.find((item) => item.id === "postConfigured")?.title).toBe(
-      "カスタム投稿",
+    expect(loadPostPresets).not.toHaveBeenCalled();
+
+    await backgroundModule.handleContextMenuClick(
+      { menuItemId: "postPreset:mine" } as chrome.contextMenus.OnClickData,
+      tab as chrome.tabs.Tab,
+      deps,
     );
-    const english = backgroundModule.buildContextMenuSpecs(
-      [],
-      "Custom Post",
-      true,
-      "en",
-    );
-    expect(english.find((item) => item.id === "postConfigured")?.title).toBe(
-      "Custom Post",
-    );
-    const named = backgroundModule.buildContextMenuSpecs(
-      [],
-      "My post",
-      true,
-      "ja",
-    );
-    expect(named.find((item) => item.id === "postConfigured")?.title).toBe(
-      "My post",
+    expect(setPendingAction).toHaveBeenLastCalledWith(
+      expect.objectContaining({ type: "post", instructions: "Azure" }),
     );
   });
-  it("registers the post submenu as a parent with four children", () => {
+  it("creates one child per preset under the post parent", () => {
+    const specs = backgroundModule.buildContextMenuSpecs(
+      [],
+      [
+        { ...DEFAULT_POST_PRESETS[0], id: "a", name: "  Azure " },
+        { ...DEFAULT_POST_PRESETS[1], id: "b", name: "" },
+      ],
+    );
+    const children = specs.filter(
+      (spec) => spec.parentId === backgroundModule.POST_PARENT_MENU_ID,
+    );
+    expect(children).toEqual([
+      {
+        id: "postPreset:a",
+        parentId: backgroundModule.POST_PARENT_MENU_ID,
+        title: "Azure",
+        contexts: ["page"],
+      },
+      {
+        id: "postPreset:b",
+        parentId: backgroundModule.POST_PARENT_MENU_ID,
+        title: "Post",
+        contexts: ["page"],
+      },
+    ]);
+  });
+  it("omits the post parent when every preset was deleted", () => {
+    const ids = backgroundModule
+      .buildContextMenuSpecs([], [])
+      .map((spec) => spec.id);
+    expect(ids).not.toContain(backgroundModule.POST_PARENT_MENU_ID);
+  });
+  it("registers the post submenu as a parent with the four built-in children", () => {
     const specs = backgroundModule.buildContextMenuSpecs([]);
     const parent = specs.find(
       (spec) => spec.id === backgroundModule.POST_PARENT_MENU_ID,
@@ -211,8 +292,8 @@ describe("buildContextMenuSpecs", () => {
     const children = specs.filter(
       (spec) => spec.parentId === backgroundModule.POST_PARENT_MENU_ID,
     );
-    expect(children.map((spec) => spec.id).sort()).toEqual(
-      Object.keys(backgroundModule.POST_MENU_ITEMS).sort(),
+    expect(children.map((spec) => spec.id)).toEqual(
+      DEFAULT_POST_PRESETS.map((preset) => `postPreset:${preset.id}`),
     );
     expect(children).toHaveLength(4);
     for (const child of children) {

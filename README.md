@@ -105,7 +105,7 @@ Available now: [Install from Chrome Web Store](https://chromewebstore.google.com
 
 ## Usage
 
-1. Launch a local bridge: VS Code extension (auto-start available) or `npm run start -- --port 3210 --workspace-root ..` in `standalone-bridge`
+1. Launch a local bridge: VS Code extension (auto-start available) or `npm run start -- --port 3211 --workspace-root ..` in `standalone-bridge` (default port 3211; the extension prefers the VS Code bridge on 3210 and falls back to standalone)
 2. Open Chrome extension side panel
 3. Enter questions or operation instructions on any web page
 

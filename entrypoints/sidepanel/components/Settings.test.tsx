@@ -70,6 +70,11 @@ function renderSettings(options?: {
       onOperationModeChange={noop}
       serverPort={3210}
       onServerPortChange={noop}
+      standaloneServerPort={3211}
+      onStandaloneServerPortChange={noop}
+      bridgeMode="auto"
+      onBridgeModeChange={noop}
+      bridgeKind={null}
       allowHighRiskActions={options?.allowHighRiskActions ?? true}
       onAllowHighRiskActionsChange={noop}
       allowEvaluateAction={false}
@@ -106,21 +111,25 @@ describe("Settings provider UI", () => {
     );
     expect(english).toContain("How is this used?");
   });
-  it("localizes assistant fields and explains the blank custom post preset", () => {
+  it("localizes assistant fields and lists independent post presets", () => {
     const japanese = renderSettings({ assistant: true, language: "ja" });
     expect(japanese).toContain("共通の指示");
     expect(japanese).toContain("回答言語");
     expect(japanese).toContain("画面の言語に従う（日本語）");
-    expect(japanese).toContain("カスタム投稿の指示を空欄にすると？");
-    expect(japanese).toContain("フォーマル・140字");
-    expect(japanese).toContain('value="カスタム投稿"');
+    expect(japanese).toContain("指示を空欄にすると？");
+    expect(japanese).toContain("ポストのプリセット");
+    expect(japanese).toContain('value="カジュアル（140字）"');
+    expect(japanese).toContain('value="フォーマル（500字・具体例つき）"');
+    expect(japanese).toContain("プリセットを追加");
     expect(japanese).toContain("<details");
     expect(japanese).not.toContain("Global instructions");
 
     const english = renderSettings({ assistant: true, language: "en" });
     expect(english).toContain("Global instructions");
     expect(english).toContain("Follow interface language (English)");
-    expect(english).toContain("built-in formal 140-character prompt");
+    expect(english).toContain("Post presets");
+    expect(english).toContain("Apply global and profile instructions");
+    expect(english).toContain("Presets are independent of each other.");
   });
   it("locks profile replacement while a task is running", () => {
     const html = renderToStaticMarkup(

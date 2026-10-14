@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  MAX_POST_PRESETS,
   buildChatContext,
+  buildPostPresetPrompt,
   normalizeAssistantSettings,
 } from "./assistant-settings";
 import {
@@ -72,18 +74,18 @@ describe("assistant settings", () => {
     expect(settings.profiles).toHaveLength(1);
     expect(settings.selectedProfileId).toBe("a");
   });
-  it("applies post instructions only to the selected task", () => {
+  it("applies instructions only to the task that carries them", () => {
     const settings = normalizeAssistantSettings({
       globalInstructions: "Global",
       mode: "automation",
-      post: { name: "Azure Post", instructions: "Azure audience" },
     });
     const target = { tabId: 1, url: "https://example.com/" };
     const post = buildChatContext(settings, target, "ok", {
       kind: "post",
-      instructions: "default",
+      instructions: "Azure audience",
     });
     expect(post.taskInstructions).toBe("Azure audience");
+    expect(post.globalInstructions).toBe("Global");
     expect(post.allowedActions).toEqual([]);
     expect(isChatContext(post)).toBe(true);
     const chat = buildChatContext(settings, target, "ok");
@@ -93,6 +95,100 @@ describe("assistant settings", () => {
     expect(
       buildChatContext(settings, target, "ok", undefined, false).allowedActions,
     ).toEqual([]);
+  });
+  it("drops global and profile instructions when a post opts out", () => {
+    const settings = normalizeAssistantSettings({
+      globalInstructions: "Global",
+      profiles: [{ id: "p", name: "P", instructions: "Profile" }],
+    });
+    const optedOut = buildChatContext(settings, undefined, "ok", {
+      kind: "post",
+      instructions: "mine",
+      useCommonInstructions: false,
+    });
+    expect(optedOut.globalInstructions).toBe("");
+    expect(optedOut.profileInstructions).toBe("");
+    expect(optedOut.taskInstructions).toBe("mine");
+    const optedIn = buildChatContext(settings, undefined, "ok", {
+      kind: "post",
+      instructions: "mine",
+    });
+    expect(optedIn.globalInstructions).toBe("Global");
+    expect(optedIn.profileInstructions).toBe("Profile");
+  });
+  it("starts with the four built-in post presets", () => {
+    const { posts } = normalizeAssistantSettings(null);
+    expect(posts.map((post) => `${post.tone}-${post.length}`)).toEqual([
+      "casual-short",
+      "casual-long",
+      "formal-short",
+      "formal-long",
+    ]);
+    expect(posts.every((post) => post.instructions === "")).toBe(true);
+    expect(posts.every((post) => post.useCommonInstructions)).toBe(true);
+  });
+  it("keeps post presets independent, bounded and unique", () => {
+    const many = Array.from({ length: 15 }, (_, index) => ({
+      id: `p${index}`,
+      name: `P${index}`,
+      instructions: `i${index}`,
+      tone: "casual",
+      length: "long",
+      useCommonInstructions: false,
+    }));
+    const settings = normalizeAssistantSettings({
+      posts: [{ id: "dup", name: "A" }, { id: "dup", name: "B" }, ...many],
+    });
+    expect(settings.posts).toHaveLength(MAX_POST_PRESETS);
+    expect(settings.posts[0]).toMatchObject({
+      id: "dup",
+      name: "A",
+      tone: "formal",
+      length: "short",
+      useCommonInstructions: true,
+    });
+    expect(new Set(settings.posts.map((post) => post.id)).size).toBe(
+      settings.posts.length,
+    );
+    expect(settings.posts[1]).toMatchObject({
+      useCommonInstructions: false,
+      tone: "casual",
+      length: "long",
+    });
+  });
+  it("allows deleting every post preset", () => {
+    expect(normalizeAssistantSettings({ posts: [] }).posts).toEqual([]);
+  });
+  it("migrates a legacy single custom post only when it has instructions", () => {
+    const legacy = normalizeAssistantSettings({
+      post: { name: "Azure Post", instructions: "Azure audience" },
+    });
+    expect(legacy.posts).toHaveLength(5);
+    expect(legacy.posts[4]).toMatchObject({
+      name: "Azure Post",
+      instructions: "Azure audience",
+      tone: "formal",
+      length: "short",
+    });
+    expect(
+      normalizeAssistantSettings({
+        post: { name: "Custom Post", instructions: "   " },
+      }).posts,
+    ).toHaveLength(4);
+    expect(
+      normalizeAssistantSettings({
+        post: { name: "Custom Post", instructions: "x" },
+      }).posts[4].name,
+    ).toBe("カスタム投稿");
+  });
+  it("builds a preset prompt from its instructions or its tone and length", () => {
+    const base = { tone: "casual", length: "short" } as const;
+    expect(
+      buildPostPresetPrompt({ ...base, instructions: "  custom  " }, "ja"),
+    ).toBe("  custom  ");
+    const builtin = buildPostPresetPrompt({ ...base, instructions: "" }, "ja");
+    expect(builtin).toContain("140字以内");
+    expect(builtin).toContain("カジュアル");
   });
   it("uses the interface language for custom actions unless a response language is saved", () => {
     const settings = normalizeAssistantSettings({

@@ -18,10 +18,12 @@ import type {
 import type { Language } from "../i18n";
 import { t } from "../i18n";
 import {
+  DEFAULT_STANDALONE_SERVER_PORT,
   MAX_SERVER_PORT,
   MIN_SERVER_PORT,
   normalizeServerPort,
 } from "../server-port";
+import type { BridgeKind, BridgeMode } from "../bridge-resolution";
 import { buildDisplayedCopilotModels } from "../copilot-models";
 import type { CustomPrompt } from "../pending-action";
 import {
@@ -61,6 +63,11 @@ interface SettingsProps {
   onOperationModeChange: (mode: OperationMode) => void;
   serverPort: number;
   onServerPortChange: (port: number) => void;
+  standaloneServerPort: number;
+  onStandaloneServerPortChange: (port: number) => void;
+  bridgeMode: BridgeMode;
+  onBridgeModeChange: (mode: BridgeMode) => void;
+  bridgeKind: BridgeKind | null;
   allowHighRiskActions: boolean;
   onAllowHighRiskActionsChange: (enabled: boolean) => void;
   allowEvaluateAction: boolean;
@@ -155,6 +162,11 @@ export function Settings({
   onOperationModeChange,
   serverPort,
   onServerPortChange,
+  standaloneServerPort,
+  onStandaloneServerPortChange,
+  bridgeMode,
+  onBridgeModeChange,
+  bridgeKind,
   allowHighRiskActions,
   onAllowHighRiskActionsChange,
   allowEvaluateAction,
@@ -231,6 +243,23 @@ export function Settings({
     const normalizedPort = normalizeServerPort(serverPortInput);
     setServerPortInput(String(normalizedPort));
     onServerPortChange(normalizedPort);
+  };
+
+  const [standalonePortInput, setStandalonePortInput] = React.useState(
+    String(standaloneServerPort),
+  );
+
+  React.useEffect(() => {
+    setStandalonePortInput(String(standaloneServerPort));
+  }, [standaloneServerPort]);
+
+  const commitStandalonePortInput = () => {
+    const normalizedPort = normalizeServerPort(
+      standalonePortInput,
+      DEFAULT_STANDALONE_SERVER_PORT,
+    );
+    setStandalonePortInput(String(normalizedPort));
+    onStandaloneServerPortChange(normalizedPort);
   };
 
   const isEvaluateActionDisabled = !allowHighRiskActions;
@@ -1008,6 +1037,34 @@ export function Settings({
           </select>
         </div>
 
+        {/* Bridge Mode */}
+        <div className="mb-4">
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            {t("bridgeMode", language)}
+          </label>
+          <select
+            value={bridgeMode}
+            onChange={(e) => onBridgeModeChange(e.target.value as BridgeMode)}
+            className="w-full p-2 border rounded bg-white"
+            aria-label={t("bridgeMode", language)}
+          >
+            <option value="auto">{t("bridgeModeAuto", language)}</option>
+            <option value="vscode">{t("bridgeModeVscode", language)}</option>
+            <option value="standalone">
+              {t("bridgeModeStandalone", language)}
+            </option>
+          </select>
+          <p className="text-xs text-gray-500 mt-1">
+            {t("bridgeModeDesc", language)}
+            {bridgeKind && (
+              <>
+                {" "}
+                {t("bridgeModeCurrent", language)}: {bridgeKind}
+              </>
+            )}
+          </p>
+        </div>
+
         {/* Server Port */}
         <div className="mb-4">
           <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -1031,6 +1088,32 @@ export function Settings({
           />
           <p className="text-xs text-gray-500 mt-1">
             {t("serverPortDesc", language)}
+          </p>
+        </div>
+
+        {/* Standalone Server Port */}
+        <div className="mb-4">
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            {t("standaloneServerPort", language)}
+          </label>
+          <input
+            type="number"
+            min={MIN_SERVER_PORT}
+            max={MAX_SERVER_PORT}
+            value={standalonePortInput}
+            onChange={(e) => setStandalonePortInput(e.target.value)}
+            onBlur={commitStandalonePortInput}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                commitStandalonePortInput();
+              }
+            }}
+            className="w-full p-2 border rounded"
+            aria-label={t("standaloneServerPort", language)}
+          />
+          <p className="text-xs text-gray-500 mt-1">
+            {t("standaloneServerPortDesc", language)}
           </p>
         </div>
 

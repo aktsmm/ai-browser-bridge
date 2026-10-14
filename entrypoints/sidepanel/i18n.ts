@@ -114,8 +114,18 @@ export const translations = {
     fileOperations: "ファイル操作",
     fileOperationsDesc: "AIがワークスペースにファイル作成",
     language: "言語",
-    serverPort: "サーバーポート",
-    serverPortDesc: "ローカル bridge server の接続先ポート (1-65535)",
+    serverPort: "VS Code bridge ポート",
+    serverPortDesc: "VS Code 拡張の bridge の接続先ポート (1-65535、既定 3210)",
+    standaloneServerPort: "standalone bridge ポート",
+    standaloneServerPortDesc:
+      "VS Code を使わない standalone bridge の接続先ポート (1-65535、既定 3211)",
+    bridgeMode: "接続先",
+    bridgeModeAuto: "自動 (VS Code → standalone)",
+    bridgeModeVscode: "VS Code のみ",
+    bridgeModeStandalone: "standalone のみ",
+    bridgeModeDesc:
+      "自動では VS Code を優先し、接続できないときだけ standalone を使います。",
+    bridgeModeCurrent: "現在の接続先",
     allowHighRiskActions: "高リスク操作を許可",
     allowHighRiskActionsDesc:
       "newTab / closeTab / Playwright browser_evaluate などの高リスク操作を実行可能にします。無効時は自動実行しません。",
@@ -241,8 +251,19 @@ export const translations = {
     fileOperations: "File Operations",
     fileOperationsDesc: "AI creates files in workspace",
     language: "Language",
-    serverPort: "Server Port",
-    serverPortDesc: "Target port of the local bridge server (1-65535)",
+    serverPort: "VS Code bridge port",
+    serverPortDesc:
+      "Port of the VS Code extension bridge (1-65535, default 3210)",
+    standaloneServerPort: "Standalone bridge port",
+    standaloneServerPortDesc:
+      "Port of the standalone bridge that runs without VS Code (1-65535, default 3211)",
+    bridgeMode: "Bridge target",
+    bridgeModeAuto: "Auto (VS Code → standalone)",
+    bridgeModeVscode: "VS Code only",
+    bridgeModeStandalone: "Standalone only",
+    bridgeModeDesc:
+      "Auto prefers VS Code and uses standalone only when VS Code is unreachable.",
+    bridgeModeCurrent: "Connected to",
     allowHighRiskActions: "Allow High-Risk Actions",
     allowHighRiskActionsDesc:
       "Allows high-risk actions such as newTab / closeTab / Playwright browser_evaluate. When disabled, these actions are not executed.",

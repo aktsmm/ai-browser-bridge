@@ -2,7 +2,7 @@
   "name": "copilot-browser-bridge-standalone",
   "description": "Standalone localhost bridge for AI Browser Bridge",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "build": "tsc -p ./",
