@@ -6,10 +6,12 @@ import {
 } from "../../standalone-bridge/src/chat-context";
 import type { Language } from "./i18n";
 import {
-  getPostPrompt,
+  buildPostTaskPrompt,
+  type PostCountRule,
   type PostLength,
   type PostTone,
 } from "./pending-action";
+import { xPostLimit } from "./x-char-count";
 
 export const ASSISTANT_SETTINGS_KEY = "assistantSettingsV1";
 export const MAX_POST_PRESETS = 10;
@@ -26,6 +28,8 @@ export interface PostPreset {
   instructions: string;
   tone: PostTone;
   length: PostLength;
+  /** x のとき X の重み付き文字数ルールを指示へ足し、回答に文字数と本文コピーを出す。 */
+  countRule: PostCountRule;
   useCommonInstructions: boolean;
 }
 export interface AssistantSettings {
@@ -42,6 +46,8 @@ export interface TaskOptions {
   instructions?: string;
   /** false のとき、共通指示とプロフィール指示をこのタスクに適用しない。 */
   useCommonInstructions?: boolean;
+  /** X の文字数上限。あると回答に文字数カウンターと本文コピーを出す。 */
+  xPostLimit?: number;
 }
 
 export const DEFAULT_POST_PRESETS: readonly PostPreset[] = [
@@ -51,6 +57,7 @@ export const DEFAULT_POST_PRESETS: readonly PostPreset[] = [
     instructions: "",
     tone: "casual",
     length: "short",
+    countRule: "x",
     useCommonInstructions: true,
   },
   {
@@ -59,6 +66,7 @@ export const DEFAULT_POST_PRESETS: readonly PostPreset[] = [
     instructions: "",
     tone: "casual",
     length: "long",
+    countRule: "x",
     useCommonInstructions: true,
   },
   {
@@ -67,6 +75,7 @@ export const DEFAULT_POST_PRESETS: readonly PostPreset[] = [
     instructions: "",
     tone: "formal",
     length: "short",
+    countRule: "x",
     useCommonInstructions: true,
   },
   {
@@ -75,6 +84,7 @@ export const DEFAULT_POST_PRESETS: readonly PostPreset[] = [
     instructions: "",
     tone: "formal",
     length: "long",
+    countRule: "x",
     useCommonInstructions: true,
   },
 ];
@@ -90,19 +100,34 @@ export function createPostPreset(): PostPreset {
     instructions: "",
     tone: "formal",
     length: "short",
+    countRule: "x",
     useCommonInstructions: true,
   };
 }
 
-/** プリセットの指示があればそれを、空なら tone / length の組み込みプロンプトを返す。 */
+/** プリセットの指示（空なら tone / length の組み込みプロンプト）を返す。countRule が x なら数え方の指示を足す。 */
 export function buildPostPresetPrompt(
-  preset: Pick<PostPreset, "instructions" | "tone" | "length">,
+  preset: Pick<PostPreset, "instructions" | "tone" | "length" | "countRule">,
   lang: Language,
   url?: string,
 ): string {
-  return preset.instructions.trim()
-    ? preset.instructions
-    : getPostPrompt(lang, preset.tone, preset.length, url);
+  return buildPostTaskPrompt(
+    {
+      instructions: preset.instructions,
+      tone: preset.tone,
+      length: preset.length,
+      countRule: preset.countRule,
+      url,
+    },
+    lang,
+  );
+}
+
+/** 文字数ルールが x のプリセットだけ、X の上限を返す。 */
+export function presetXLimit(
+  preset: Pick<PostPreset, "length" | "countRule">,
+): number | undefined {
+  return preset.countRule === "x" ? xPostLimit(preset.length) : undefined;
 }
 
 function normalizePostPresets(
@@ -123,6 +148,7 @@ function normalizePostPresets(
         instructions,
         tone: "formal",
         length: "short",
+        countRule: "x",
         useCommonInstructions: true,
       });
     }
@@ -142,6 +168,7 @@ function normalizePostPresets(
       instructions: boundedText(candidate.instructions, 8000),
       tone: candidate.tone === "casual" ? "casual" : "formal",
       length: candidate.length === "long" ? "long" : "short",
+      countRule: candidate.countRule === "none" ? "none" : "x",
       useCommonInstructions: candidate.useCommonInstructions !== false,
     });
   }

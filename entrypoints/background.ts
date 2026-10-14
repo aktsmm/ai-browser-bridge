@@ -136,6 +136,7 @@ export function buildPendingActionFromContextMenu(
       tone: preset.tone,
       length: preset.length,
       ...(instructions ? { instructions } : {}),
+      countRule: preset.countRule,
       useCommonInstructions: preset.useCommonInstructions,
       tabId: tab?.id,
       url: tab?.url,

@@ -1,6 +1,12 @@
 import React, { useState, useRef, useEffect } from "react";
 import type { PostPreset, TaskOptions } from "../assistant-settings";
-import { buildPostPresetPrompt } from "../assistant-settings";
+import { buildPostPresetPrompt, presetXLimit } from "../assistant-settings";
+import {
+  X_STANDARD_LIMIT,
+  extractPostBody,
+  xLimitForAnswer,
+  xWeightedLength,
+} from "../x-char-count";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
@@ -336,6 +342,7 @@ export function Chat({
 }: ChatProps) {
   const [input, setInput] = useState("");
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+  const [copiedBodyIndex, setCopiedBodyIndex] = useState<number | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<
     ChatAttachment[]
   >([]);
@@ -463,15 +470,23 @@ export function Chat({
     setReadingAttachments(false);
   };
 
-  const handleCopy = async (text: string, index: number) => {
+  const handleCopy = async (
+    text: string,
+    index: number,
+    target: "full" | "body" = "full",
+  ) => {
+    const markCopied = target === "body" ? setCopiedBodyIndex : setCopiedIndex;
     try {
       await navigator.clipboard.writeText(text);
-      setCopiedIndex(index);
+      setCopiedIndex(null);
+      setCopiedBodyIndex(null);
+      markCopied(index);
       if (copiedTimerRef.current !== null) {
         window.clearTimeout(copiedTimerRef.current);
       }
       copiedTimerRef.current = window.setTimeout(() => {
         setCopiedIndex(null);
+        setCopiedBodyIndex(null);
         copiedTimerRef.current = null;
       }, 2000);
     } catch {
@@ -952,6 +967,51 @@ export function Chat({
                       <span className="inline-block w-2 h-4 ml-1 bg-gray-400 animate-pulse" />
                     )}
 
+                  {!(isLoading && index === messages.length - 1) &&
+                    isAssistantAnswer(message) &&
+                    (() => {
+                      const limit = xLimitForAnswer(messages, index);
+                      if (!limit) return null;
+                      const body = extractPostBody(message.content);
+                      const weighted = xWeightedLength(body);
+                      const over = weighted > limit;
+                      return (
+                        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                          <span
+                            role="status"
+                            className={
+                              over
+                                ? "font-semibold text-red-700"
+                                : "text-gray-600"
+                            }
+                          >
+                            {`X ${weighted}/${limit}`}
+                            {over
+                              ? language === "ja"
+                                ? "（超過）"
+                                : " (over)"
+                              : ""}
+                            {weighted > X_STANDARD_LIMIT
+                              ? language === "ja"
+                                ? "（280超は X Premium が必要）"
+                                : " (over 280 needs X Premium)"
+                              : ""}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleCopy(body, index, "body")}
+                            className="px-2 py-0.5 rounded bg-gray-100 hover:bg-gray-200 text-gray-700 focus-visible:ring-2 focus-visible:ring-blue-500"
+                          >
+                            {copiedBodyIndex === index
+                              ? "✓"
+                              : language === "ja"
+                                ? "投稿文をコピー"
+                                : "Copy post text"}
+                          </button>
+                        </div>
+                      );
+                    })()}
+
                   {/* Quick actions at end of latest assistant message */}
                   {!isLoading &&
                     isAssistantAnswer(message) &&
@@ -1085,6 +1145,7 @@ export function Chat({
                       kind: "post",
                       instructions: buildPostPresetPrompt(preset, language),
                       useCommonInstructions: preset.useCommonInstructions,
+                      xPostLimit: presetXLimit(preset),
                     },
                   )
                 }

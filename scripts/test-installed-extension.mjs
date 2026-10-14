@@ -410,6 +410,7 @@ try {
             instructions: "Fixture post instruction",
             tone: "formal",
             length: "short",
+            countRule: "x",
             useCommonInstructions: true,
           },
         ],
@@ -431,6 +432,7 @@ try {
           tone: "formal",
           length: "short",
           instructions: "Fixture post instruction",
+          countRule: "x",
           useCommonInstructions: true,
           tabId,
         },
@@ -476,10 +478,19 @@ try {
   assert(requests[0].pageContent.includes("Verified local article"));
   assert(requests[0].pageContent.includes("Shadow fixture content"));
   assert(requests[0].pageContent.includes("Nested fixture content"));
-  assert.equal(
-    requests[0].context.taskInstructions,
-    "Fixture post instruction",
+  assert(
+    requests[0].context.taskInstructions.startsWith(
+      "Fixture post instruction\n",
+    ),
   );
+  assert(requests[0].context.taskInstructions.includes("weighted 280"));
+  await panel
+    .getByRole("status")
+    .filter({ hasText: /^X \d+\/280$/ })
+    .waitFor();
+  await panel
+    .getByRole("button", { name: "Copy post text", exact: true })
+    .waitFor();
   assert.deepEqual(requests[0].context.allowedActions, []);
   if (values["display-only"]) {
     await panel

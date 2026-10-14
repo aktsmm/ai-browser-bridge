@@ -71,6 +71,9 @@ export function AssistantPreferences({
           short: "140字",
           long: "500字",
           useCommon: "共通の指示とプロフィールの指示を適用する",
+          countRule: "文字数ルール",
+          countX: "X の重み付きカウント（指示と回答の文字数表示）",
+          countNone: "なし",
           addPost: "プリセットを追加",
           duplicatePost: "複製",
           copySuffix: "（コピー）",
@@ -107,6 +110,9 @@ export function AssistantPreferences({
           short: "140 chars",
           long: "500 chars",
           useCommon: "Apply global and profile instructions",
+          countRule: "Character rule",
+          countX: "X weighted count (adds the rule and shows the count)",
+          countNone: "None",
           addPost: "Add preset",
           duplicatePost: "Duplicate",
           copySuffix: " (copy)",
@@ -291,6 +297,21 @@ export function AssistantPreferences({
                   </select>
                 </label>
               </div>
+              <label className="block text-sm">
+                {labels.countRule}
+                <select
+                  className={inputClass}
+                  value={preset.countRule}
+                  onChange={(event) =>
+                    updatePost(preset.id, {
+                      countRule: event.target.value as PostPreset["countRule"],
+                    })
+                  }
+                >
+                  <option value="x">{labels.countX}</option>
+                  <option value="none">{labels.countNone}</option>
+                </select>
+              </label>
               <label className="block text-sm">
                 {labels.postInstructions}
                 <textarea

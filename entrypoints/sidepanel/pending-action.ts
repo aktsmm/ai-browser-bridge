@@ -1,4 +1,5 @@
 import type { Language } from "./i18n";
+import { xPostLimit } from "./x-char-count";
 
 type PendingDispatchState = {
   isLoading: boolean;
@@ -111,6 +112,31 @@ export type PostTone = "casual" | "formal";
 /** ポストの長さ。short=140字以内、long=500字以内（140字版に具体例を追加）。 */
 export type PostLength = "short" | "long";
 
+/** x: X の重み付き文字数ルールを指示に含める / none: 含めない（X 以外の用途）。 */
+export type PostCountRule = "x" | "none";
+
+/** X の数え方（日本語・絵文字=2、その他=1、URL=23）を伝え、上限と安全マージンを示す指示行。 */
+export function xCountRuleLine(lang: Language, length: PostLength): string {
+  const limit = xPostLimit(length);
+  const margin = Math.floor(limit * 0.9);
+  if (lang === "ja") {
+    return `- 文字数は X の重み付きカウントで全体${limit}以内に収めてください（日本語だけなら約${limit / 2}字）。全角の日本語・絵文字は1文字=2、半角の英数字・記号・改行は1、URLは長さに関わらず23として数え、ハッシュタグも含めます。数え間違いに備え、${margin}以内を目標にしてください。`;
+  }
+  return `- Count characters the way X does and keep the whole post within a weighted ${limit} (about ${limit / 2} Japanese characters): CJK characters and emoji count as 2, other letters, digits, punctuation and line breaks as 1, every URL counts as 23 regardless of length, and hashtags are included. Aim for ${margin} or less to leave a margin for counting errors.`;
+}
+
+function postLengthLine(
+  lang: Language,
+  length: PostLength,
+  countRule: PostCountRule,
+): string {
+  if (countRule === "x") return xCountRuleLine(lang, length);
+  const budget = length === "long" ? 500 : 140;
+  return lang === "ja"
+    ? `- 全体で${budget}字以内に収めてください（URLは23字、ハッシュタグも字数に含めて計算）。`
+    : `- Keep the whole post within ${budget} characters (count the URL as 23 chars and include hashtags).`;
+}
+
 /**
  * ポスト本文に貼るURLを後段（送信処理）で実URLへ差し替えるためのプレースホルダ。
  * URLを明示的に渡せない経路（チャットのクイックアクション等）でこのトークンを埋め込み、
@@ -156,8 +182,34 @@ export function getPostPrompt(
   tone: PostTone = "formal",
   length: PostLength = "short",
   url?: string,
+  countRule: PostCountRule = "x",
 ): string {
-  return `${buildPostPromptBody(lang, tone, length, url)}\n${pageContentInjectionGuard(lang)}`;
+  return `${buildPostPromptBody(lang, tone, length, url, countRule)}\n${pageContentInjectionGuard(lang)}`;
+}
+
+/**
+ * ポストタスクの指示を返す。カスタム指示があればそれを使い（countRule が x なら数え方の指示を末尾へ足す）、
+ * 空なら tone / length の組み込みプロンプトを返す。
+ */
+export function buildPostTaskPrompt(
+  options: {
+    instructions?: string;
+    tone?: PostTone;
+    length?: PostLength;
+    countRule?: PostCountRule;
+    url?: string;
+  },
+  lang: Language,
+): string {
+  const countRule = options.countRule === "none" ? "none" : "x";
+  const length = options.length ?? "short";
+  const instructions = options.instructions?.trim() ?? "";
+  if (!instructions) {
+    return getPostPrompt(lang, options.tone, length, options.url, countRule);
+  }
+  return countRule === "x"
+    ? `${instructions}\n${xCountRuleLine(lang, length)}`
+    : instructions;
 }
 
 function buildPostPromptBody(
@@ -165,8 +217,10 @@ function buildPostPromptBody(
   tone: PostTone = "formal",
   length: PostLength = "short",
   url?: string,
+  countRule: PostCountRule = "x",
 ): string {
   const urlLine = postUrlInstruction(lang, url);
+  const lengthLine = postLengthLine(lang, length, countRule);
 
   if (lang === "ja") {
     if (tone === "casual" && length === "short") {
@@ -175,7 +229,7 @@ function buildPostPromptBody(
         "条件:",
         "- こちらで抽出済みのページ本文だけを根拠にしてください。",
         "- ブラウザ操作やページ遷移はしないでください。",
-        "- 全体で140字以内に収めてください（URLは23字、ハッシュタグも字数に含めて計算）。",
+        lengthLine,
         "- 構成は次の順にしてください:",
         "  1行目: 結論を一文で（フックになる言い回しでOK、絵文字は0〜1個）",
         "  （空行）",
@@ -196,7 +250,7 @@ function buildPostPromptBody(
         "条件:",
         "- こちらで抽出済みのページ本文だけを根拠にしてください。",
         "- ブラウザ操作やページ遷移はしないでください。",
-        "- 全体で500字以内に収めてください（URLは23字、ハッシュタグも字数に含めて計算）。",
+        lengthLine,
         "- 構成は次の順にしてください:",
         "  1行目: 結論を一文で（フックになる言い回しでOK、絵文字は0〜1個）",
         "  2行目: 補足を一文で（なぜ面白いか／どう役立つか）",
@@ -219,7 +273,7 @@ function buildPostPromptBody(
         "条件:",
         "- こちらで抽出済みのページ本文だけを根拠にしてください。",
         "- ブラウザ操作やページ遷移はしないでください。",
-        "- 全体で500字以内に収めてください（URLは23字、ハッシュタグも字数に含めて計算）。",
+        lengthLine,
         "- 構成は次の順にしてください:",
         "  1行目: 結論を一文で（事実ベースの言い切り、誇張しない）",
         "  2行目: 補足を一文で（手段・仕組み・狙いを端的に）",
@@ -242,7 +296,7 @@ function buildPostPromptBody(
       "条件:",
       "- こちらで抽出済みのページ本文だけを根拠にしてください。",
       "- ブラウザ操作やページ遷移はしないでください。",
-      "- 全体で140字以内に収めてください（URLは23字、ハッシュタグも字数に含めて計算）。",
+      lengthLine,
       "- 構成は次の順にしてください:",
       "  1行目: 結論を一文で（事実ベースの言い切り、誇張しない）",
       "  （空行）",
@@ -264,7 +318,7 @@ function buildPostPromptBody(
       "Rules:",
       "- Use only the page text already extracted by this extension.",
       "- Do not navigate, click, or perform additional browser actions.",
-      "- Keep the whole post within 140 characters (count the URL as 23 chars and include hashtags).",
+      lengthLine,
       "- Use this structure:",
       "  Line 1: the takeaway in one sentence (a hook is fine, 0-1 emoji)",
       "  (blank line)",
@@ -285,7 +339,7 @@ function buildPostPromptBody(
       "Rules:",
       "- Use only the page text already extracted by this extension.",
       "- Do not navigate, click, or perform additional browser actions.",
-      "- Keep the whole post within 500 characters (count the URL as 23 chars and include hashtags).",
+      lengthLine,
       "- Use this structure:",
       "  Line 1: the takeaway in one sentence (a hook is fine, 0-1 emoji)",
       "  Line 2: one supporting sentence (why it is interesting / useful)",
@@ -308,7 +362,7 @@ function buildPostPromptBody(
       "Rules:",
       "- Use only the page text already extracted by this extension.",
       "- Do not navigate, click, or perform additional browser actions.",
-      "- Keep the whole post within 500 characters (count the URL as 23 chars and include hashtags).",
+      lengthLine,
       "- Use this structure:",
       "  Line 1: the takeaway in one sentence (factual, no exaggeration)",
       "  Line 2: one supporting sentence (the method, mechanism, or intent)",
@@ -331,7 +385,7 @@ function buildPostPromptBody(
     "Rules:",
     "- Use only the page text already extracted by this extension.",
     "- Do not navigate, click, or perform additional browser actions.",
-    "- Keep the whole post within 140 characters (count the URL as 23 chars and include hashtags).",
+    lengthLine,
     "- Use this structure:",
     "  Line 1: the takeaway in one sentence (factual, no exaggeration)",
     "  (blank line)",
@@ -399,6 +453,7 @@ export type PendingAction = (
       length?: PostLength;
       /** プリセットのカスタム指示。空なら tone / length の組み込みプロンプト。 */
       instructions?: string;
+      countRule?: PostCountRule;
       useCommonInstructions?: boolean;
       tabId?: number;
       url?: string;
@@ -464,10 +519,16 @@ export function toPendingPrompt(
 
   if (candidate.type === "post") {
     const post = candidate as Extract<PendingAction, { type: "post" }>;
-    const instructions =
-      typeof post.instructions === "string" ? post.instructions.trim() : "";
-    return (
-      instructions || getPostPrompt(lang, post.tone, post.length, post.url)
+    return buildPostTaskPrompt(
+      {
+        instructions:
+          typeof post.instructions === "string" ? post.instructions : "",
+        tone: post.tone,
+        length: post.length,
+        countRule: post.countRule,
+        url: post.url,
+      },
+      lang,
     );
   }
 

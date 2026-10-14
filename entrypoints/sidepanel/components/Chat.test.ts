@@ -449,6 +449,7 @@ describe("getQuickActions", () => {
             instructions: "",
             tone: "formal",
             length: "short",
+            countRule: "x",
             useCommonInstructions: true,
           },
         ],
@@ -456,6 +457,36 @@ describe("getQuickActions", () => {
     );
     expect(html.match(/Alpha preset/g)).toHaveLength(1);
     expect(html).not.toContain("Toggle post length");
+  });
+
+  it("shows the X count and a body-only copy button for X post answers", () => {
+    const render = (xPostLimit?: number, answer = "あ".repeat(10)) =>
+      renderToStaticMarkup(
+        React.createElement(Chat, {
+          messages: [
+            {
+              role: "user",
+              content: "post",
+              ...(xPostLimit ? { xPostLimit } : {}),
+            },
+            { role: "assistant", content: answer },
+          ],
+          isLoading: false,
+          onSendMessage: vi.fn(),
+          onClearMessages: vi.fn(),
+          onStopGeneration: vi.fn(),
+          language: "en",
+          onSaveMarkdown: vi.fn(),
+          onSaveBlogDraft: vi.fn(),
+        }),
+      );
+    const html = render(280);
+    expect(html).toContain("X 20/280");
+    expect(html).toContain("Copy post text");
+    expect(html).not.toContain("(over)");
+    expect(render(280, "あ".repeat(141))).toContain("(over)");
+    expect(render(1000, "あ".repeat(200))).toContain("needs X Premium");
+    expect(render(undefined)).not.toContain("Copy post text");
   });
 
   it("keeps internal download-show links available for click handling", () => {

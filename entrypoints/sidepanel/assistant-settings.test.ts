@@ -3,6 +3,7 @@ import {
   MAX_POST_PRESETS,
   buildChatContext,
   buildPostPresetPrompt,
+  presetXLimit,
   normalizeAssistantSettings,
 } from "./assistant-settings";
 import {
@@ -182,13 +183,41 @@ describe("assistant settings", () => {
     ).toBe("カスタム投稿");
   });
   it("builds a preset prompt from its instructions or its tone and length", () => {
-    const base = { tone: "casual", length: "short" } as const;
+    const base = { tone: "casual", length: "short", countRule: "x" } as const;
+    const custom = buildPostPresetPrompt(
+      { ...base, instructions: "  custom  " },
+      "ja",
+    );
+    expect(custom.startsWith("custom\n")).toBe(true);
+    expect(custom).toContain("重み付き");
     expect(
-      buildPostPresetPrompt({ ...base, instructions: "  custom  " }, "ja"),
-    ).toBe("  custom  ");
+      buildPostPresetPrompt(
+        { ...base, countRule: "none", instructions: "  custom  " },
+        "ja",
+      ),
+    ).toBe("custom");
     const builtin = buildPostPresetPrompt({ ...base, instructions: "" }, "ja");
-    expect(builtin).toContain("140字以内");
+    expect(builtin).toContain("全体280以内");
     expect(builtin).toContain("カジュアル");
+  });
+  it("limits the X counter to presets that use the X rule", () => {
+    expect(presetXLimit({ length: "short", countRule: "x" })).toBe(280);
+    expect(presetXLimit({ length: "long", countRule: "x" })).toBe(1000);
+    expect(
+      presetXLimit({ length: "short", countRule: "none" }),
+    ).toBeUndefined();
+    const { posts } = normalizeAssistantSettings({
+      posts: [
+        { id: "a", name: "A", countRule: "none" },
+        { id: "b", name: "B" },
+      ],
+    });
+    expect(posts.map((post) => post.countRule)).toEqual(["none", "x"]);
+    expect(
+      normalizeAssistantSettings(null).posts.every(
+        (post) => post.countRule === "x",
+      ),
+    ).toBe(true);
   });
   it("uses the interface language for custom actions unless a response language is saved", () => {
     const settings = normalizeAssistantSettings({

@@ -103,6 +103,7 @@ import {
   redactPrivateText,
 } from "./personal-profile";
 import { effectiveBrowserActions } from "../../standalone-bridge/src/chat-context";
+import { xPostLimit } from "./x-char-count";
 import {
   actionUsesPersonalProfile,
   forgetDisplayEdits,
@@ -449,6 +450,12 @@ export default function App() {
             useCommonInstructions: (
               action as { useCommonInstructions?: boolean }
             ).useCommonInstructions,
+            xPostLimit:
+              (action as { countRule?: string }).countRule === "none"
+                ? undefined
+                : xPostLimit(
+                    (action as { length?: "short" | "long" }).length ?? "short",
+                  ),
           }
         : pendingType === "customPrompt"
           ? { kind: "custom", instructions: prompt }
@@ -1725,6 +1732,9 @@ export default function App() {
 
     const newUserMessage: ChatMessage = {
       role: "user",
+      ...(task?.kind === "post" && task.xPostLimit
+        ? { xPostLimit: task.xPostLimit }
+        : {}),
       content: `${resolvedMessage}${buildAttachmentDisplayText(attachments, {
         heading: t("attachedFiles", language),
         pdfNote: t("pdfAttachmentFallback", language),

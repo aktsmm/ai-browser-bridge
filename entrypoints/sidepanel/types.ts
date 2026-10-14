@@ -32,6 +32,8 @@ export interface ChatMessage {
   source?: { pageTitle: string; pageUrl: string };
   incomplete?: boolean;
   commandsNotExecuted?: boolean;
+  /** このユーザー発話が X ポスト作成タスクのときの文字数上限。次の回答にカウンターを出す。 */
+  xPostLimit?: number;
 }
 
 export function isDisplayActionRequest(message: ChatMessage): boolean {

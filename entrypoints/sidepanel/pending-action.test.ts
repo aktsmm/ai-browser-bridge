@@ -157,11 +157,12 @@ describe("toPendingPrompt", () => {
       { type: "post", tone: "casual", length: "short" },
       "ja",
     );
-    expect(ja).toContain("140字以内");
-    expect(ja).not.toContain("500字以内");
+    expect(ja).toContain("全体280以内");
+    expect(ja).toContain("重み付き");
+    expect(ja).not.toContain("全体1000以内");
   });
 
-  it("uses a post preset's own instructions instead of the built-in prompt", () => {
+  it("uses a post preset's own instructions and adds the X counting rule", () => {
     const custom = toPendingPrompt(
       {
         type: "post",
@@ -171,12 +172,36 @@ describe("toPendingPrompt", () => {
       },
       "ja",
     );
-    expect(custom).toBe("Write for Azure architects");
+    expect(custom?.startsWith("Write for Azure architects\n")).toBe(true);
+    expect(custom).toContain("全体280以内");
+    expect(
+      toPendingPrompt(
+        {
+          type: "post",
+          length: "long",
+          instructions: "Azure",
+          countRule: "none",
+        },
+        "en",
+      ),
+    ).toBe("Azure");
     const blank = toPendingPrompt(
       { type: "post", tone: "casual", length: "short", instructions: "   " },
       "ja",
     );
-    expect(blank).toContain("140字以内");
+    expect(blank).toContain("280");
+  });
+
+  it("keeps the plain budget when the X counting rule is off", () => {
+    const ja = toPendingPrompt(
+      { type: "post", tone: "formal", length: "short", countRule: "none" },
+      "ja",
+    );
+    expect(ja).toContain("140字以内");
+    expect(ja).not.toContain("重み付き");
+    const en = toPendingPrompt({ type: "post", countRule: "x" }, "en");
+    expect(en).toContain("weighted 280");
+    expect(en).toContain("URL counts as 23");
   });
 
   it("selects the long character budget for long posts", () => {
@@ -184,7 +209,7 @@ describe("toPendingPrompt", () => {
       { type: "post", tone: "formal", length: "long" },
       "ja",
     );
-    expect(ja).toContain("500字以内");
+    expect(ja).toContain("全体1000以内");
     expect(ja).toContain("です・ます");
   });
 
