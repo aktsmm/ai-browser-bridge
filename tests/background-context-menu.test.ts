@@ -166,7 +166,7 @@ describe("background context menu actions", () => {
     ).toBeNull();
   });
 
-  it("opens the side panel without waiting for pending action storage", async () => {
+  it("opens the side panel before awaiting any storage access", async () => {
     const events: string[] = [];
     let resolveStore: (() => void) | undefined;
     const setPendingAction = vi.fn(
@@ -179,8 +179,38 @@ describe("background context menu actions", () => {
     const openSidePanel = vi.fn(async () => {
       events.push("open-called");
     });
+    const loadPostPresets = vi.fn(async () => {
+      events.push("presets-loaded");
+      return [{ ...DEFAULT_POST_PRESETS[0], id: "mine" }];
+    });
 
     const result = backgroundModule.handleContextMenuClick(
+      { menuItemId: "postPreset:mine" } as chrome.contextMenus.OnClickData,
+      { id: 123, windowId: 999, url: "https://example.com" } as chrome.tabs.Tab,
+      {
+        setPendingAction,
+        openSidePanel,
+        loadCustomPrompts: vi.fn(async () => []),
+        loadPostPresets,
+      },
+    );
+
+    // ここまで await していない時点で、パネルを開く呼び出しは済んでいる必要がある
+    expect(events).toEqual(["open-called", "presets-loaded"]);
+    expect(openSidePanel).toHaveBeenCalledWith(999);
+    await vi.waitFor(() => expect(setPendingAction).toHaveBeenCalled());
+    expect(setPendingAction).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "post", id: expect.any(String) }),
+    );
+    resolveStore?.();
+    await result;
+  });
+
+  it("opens the side panel for summarize without waiting for storage", async () => {
+    const setPendingAction = vi.fn(() => new Promise<void>(() => undefined));
+    const openSidePanel = vi.fn(async () => undefined);
+
+    void backgroundModule.handleContextMenuClick(
       { menuItemId: "summarizePage" } as chrome.contextMenus.OnClickData,
       { id: 123, windowId: 999, url: "https://example.com" } as chrome.tabs.Tab,
       {
@@ -191,13 +221,10 @@ describe("background context menu actions", () => {
       },
     );
 
-    expect(events).toEqual(["store-started", "open-called"]);
     expect(openSidePanel).toHaveBeenCalledWith(999);
     expect(setPendingAction).toHaveBeenCalledWith(
       expect.objectContaining({ type: "summarize", id: expect.any(String) }),
     );
-    resolveStore?.();
-    await result;
   });
 
   it("does not open the side panel for unrelated menu actions", async () => {

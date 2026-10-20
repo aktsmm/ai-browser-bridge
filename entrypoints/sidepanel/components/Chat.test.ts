@@ -459,6 +459,39 @@ describe("getQuickActions", () => {
     expect(html).not.toContain("Toggle post length");
   });
 
+  it("keeps the post presets collapsed behind a single toggle by default", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(Chat, {
+        messages: [],
+        isLoading: false,
+        onSendMessage: vi.fn(),
+        onClearMessages: vi.fn(),
+        onStopGeneration: vi.fn(),
+        language: "ja",
+        onSaveMarkdown: vi.fn(),
+        onSaveBlogDraft: vi.fn(),
+        postPresets: [
+          {
+            id: "a",
+            name: "Alpha preset",
+            instructions: "",
+            tone: "formal",
+            length: "short",
+            countRule: "x",
+            useCommonInstructions: true,
+          },
+        ],
+      }),
+    );
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).toMatch(/id="post-preset-group"[^>]*hidden/);
+    // `.flex` が `[hidden]` を上書きするため、display はクラスで切り替える必要がある
+    const group = html.match(/<div id="post-preset-group"[^>]*>/)?.[0] ?? "";
+    expect(group).toMatch(/class="[^"]*(\s|")hidden(\s|")/);
+    expect(group).not.toMatch(/class="([^"]*\s)?flex(\s|")/);
+    expect(html).toContain("▸ ポストを作成");
+  });
+
   it("shows the X count and a body-only copy button for X post answers", () => {
     const render = (xPostLimit?: number, answer = "あ".repeat(10)) =>
       renderToStaticMarkup(

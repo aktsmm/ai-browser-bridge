@@ -165,12 +165,31 @@ export function buildPendingActionFromContextMenu(
   return null;
 }
 
+function opensSidePanel(
+  info: Pick<chrome.contextMenus.OnClickData, "menuItemId" | "selectionText">,
+): boolean {
+  const id = info.menuItemId;
+  if (typeof id !== "string") return false;
+  return (
+    id === "summarizePage" ||
+    (id === "askAboutSelection" && Boolean(info.selectionText)) ||
+    id.startsWith(POST_PRESET_MENU_PREFIX) ||
+    id.startsWith(CUSTOM_PROMPT_MENU_PREFIX)
+  );
+}
+
 export async function handleContextMenuClick(
   info: chrome.contextMenus.OnClickData,
   tab: chrome.tabs.Tab | undefined,
   deps: ContextMenuDeps,
 ): Promise<void> {
   if (typeof tab?.windowId !== "number") return;
+
+  // sidePanel.open() はユーザー操作の直後でないと失敗するため、ストレージ読込など
+  // 非同期処理の前に同期的に呼び出す。
+  const openPromise = opensSidePanel(info)
+    ? deps.openSidePanel(tab.windowId)
+    : Promise.resolve();
 
   const isCustomPrompt =
     typeof info.menuItemId === "string" &&
@@ -187,13 +206,15 @@ export async function handleContextMenuClick(
     customPrompts,
     postPresets,
   );
-  if (!pendingAction) return;
+  if (!pendingAction) {
+    await openPromise;
+    return;
+  }
 
   const storePromise = deps.setPendingAction({
     ...pendingAction,
     id: crypto.randomUUID(),
   });
-  const openPromise = deps.openSidePanel(tab.windowId);
   await Promise.all([storePromise, openPromise]);
 }
 

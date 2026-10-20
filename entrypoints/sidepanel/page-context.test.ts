@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { combinePageFrames, readPageWithRecovery } from "./page-context";
+import {
+  combinePageFrames,
+  pageLoadWaitMs,
+  readPageWithRecovery,
+  waitForTabComplete,
+} from "./page-context";
 
 const frame = {
   frameId: 3,
@@ -70,6 +75,53 @@ describe("page context", () => {
     expect((await readPageWithRecovery(read, wait)).status).toBe("empty");
     expect(read).toHaveBeenCalledTimes(3);
     expect(wait).toHaveBeenCalledTimes(2);
+  });
+  it("retries a transient read failure after readiness", async () => {
+    const read = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Frame with ID 0 was removed."))
+      .mockResolvedValue([frame]);
+    const wait = vi.fn().mockResolvedValue(undefined);
+    expect((await readPageWithRecovery(read, wait)).status).toBe("ok");
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(wait).toHaveBeenCalledOnce();
+  });
+  it("reports failure after repeated transient errors", async () => {
+    const read = vi.fn().mockRejectedValue(new Error("Frame was removed"));
+    const wait = vi.fn().mockRejectedValue(new Error("tab gone"));
+    expect((await readPageWithRecovery(read, wait)).status).toBe("failed");
+    expect(read).toHaveBeenCalledTimes(3);
+  });
+  it("waits until the tab finishes loading", async () => {
+    const getStatus = vi
+      .fn()
+      .mockResolvedValueOnce("loading")
+      .mockResolvedValueOnce("loading")
+      .mockResolvedValue("complete");
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    expect(await waitForTabComplete(getStatus, { sleep })).toBe(true);
+    expect(sleep).toHaveBeenCalledTimes(2);
+  });
+  it("gives up when the tab never completes or disappears", async () => {
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    expect(
+      await waitForTabComplete(async () => "loading", {
+        timeoutMs: 1000,
+        intervalMs: 250,
+        sleep,
+      }),
+    ).toBe(false);
+    expect(sleep).toHaveBeenCalledTimes(4);
+    expect(await waitForTabComplete(async () => undefined, { sleep })).toBe(
+      false,
+    );
+  });
+  it("keeps background reads short so a never-complete page cannot stall a send", () => {
+    const background = pageLoadWaitMs(true);
+    const foreground = pageLoadWaitMs(false);
+    expect(background.initialMs).toBeLessThan(foreground.initialMs);
+    expect(background.retryMs).toBeLessThanOrEqual(foreground.retryMs);
+    expect(foreground.initialMs).toBe(10000);
   });
   it("does not retry denied permission", async () => {
     const read = vi

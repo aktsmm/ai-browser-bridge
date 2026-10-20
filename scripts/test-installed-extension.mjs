@@ -449,9 +449,21 @@ try {
     downloadPath: downloads,
     eventsEnabled: true,
   });
-  await panel
-    .getByRole("button", { name: "Fixture Post", exact: true })
-    .waitFor();
+  const postToggle = panel.getByRole("button", {
+    name: /Create a post|ポストを作成/,
+  });
+  await postToggle.waitFor();
+  const presetButton = panel.getByRole("button", {
+    name: "Fixture Post",
+    exact: true,
+  });
+  assert.equal(
+    await presetButton.isVisible(),
+    false,
+    "Post presets must stay collapsed until the toggle is used",
+  );
+  await postToggle.click();
+  await presetButton.waitFor();
   await panel
     .getByRole("status")
     .getByRole("button", { name: "Cancel", exact: true })
@@ -1095,6 +1107,13 @@ try {
     );
   } else {
     const pageStatus = panel.getByRole("region", { name: "Page context" });
+    // 検証用にパネルを通常タブとして開いているため、裏の自動読み取りがパネル自身を読んで origin を消すことがある。
+    // 対象ページを前面に戻し、origin が表示されてから測る。
+    await panel.evaluate(
+      (tabId) => chrome.tabs.update(tabId, { active: true }),
+      sourceTabId,
+    );
+    await pageStatus.locator("[title]").first().waitFor();
     const [statusBounds, originBounds] = await Promise.all([
       pageStatus.getByRole("status").boundingBox(),
       pageStatus.locator("[title]").first().boundingBox(),

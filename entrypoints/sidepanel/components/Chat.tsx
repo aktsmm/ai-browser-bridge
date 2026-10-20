@@ -349,6 +349,8 @@ export function Chat({
   const [isDragActive, setIsDragActive] = useState(false);
   const [attachmentError, setAttachmentError] = useState("");
   const [readingAttachments, setReadingAttachments] = useState(false);
+  const [postMenuOpen, setPostMenuOpen] = useState(false);
+  const postToggleRef = useRef<HTMLButtonElement>(null);
   const readingAttachmentsRef = useRef(false);
   const conversationRef = useRef<HTMLDivElement>(null);
   const followLatestRef = useRef(true);
@@ -1126,36 +1128,61 @@ export function Chat({
         )}
         {postPresets.length > 0 && (
           <div
-            role="group"
-            aria-label={language === "ja" ? "ポストを作成" : "Create a post"}
-            className="mb-2 flex flex-wrap gap-x-3 gap-y-1"
+            className="mb-2"
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && postMenuOpen) {
+                event.stopPropagation();
+                setPostMenuOpen(false);
+                postToggleRef.current?.focus();
+              }
+            }}
           >
-            {postPresets.map((preset) => (
-              <button
-                key={preset.id}
-                type="button"
-                disabled={
-                  isLoading || Boolean(disabledReason) || readingAttachments
-                }
-                className="text-sm text-blue-700 break-words disabled:opacity-40"
-                onClick={() =>
-                  onSendMessage(
-                    language === "ja"
-                      ? "現在のページについて投稿文を作成してください。"
-                      : "Draft a post about the current page.",
-                    [],
-                    {
-                      kind: "post",
-                      instructions: buildPostPresetPrompt(preset, language),
-                      useCommonInstructions: preset.useCommonInstructions,
-                      xPostLimit: presetXLimit(preset),
-                    },
-                  )
-                }
-              >
-                {preset.name}
-              </button>
-            ))}
+            <button
+              ref={postToggleRef}
+              type="button"
+              aria-expanded={postMenuOpen}
+              aria-controls="post-preset-group"
+              onClick={() => setPostMenuOpen((open) => !open)}
+              className="text-sm text-blue-700 hover:underline focus-visible:ring-2 focus-visible:ring-blue-500"
+            >
+              {`${postMenuOpen ? "▾" : "▸"} ${language === "ja" ? "ポストを作成" : "Create a post"}`}
+            </button>
+            <div
+              id="post-preset-group"
+              role="group"
+              hidden={!postMenuOpen}
+              aria-label={language === "ja" ? "ポストを作成" : "Create a post"}
+              className={`mt-1 flex-wrap gap-x-3 gap-y-1 ${postMenuOpen ? "flex" : "hidden"}`}
+            >
+              {postPresets.map((preset) => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  disabled={
+                    isLoading || Boolean(disabledReason) || readingAttachments
+                  }
+                  className="text-sm text-blue-700 break-words disabled:opacity-40"
+                  onClick={() => {
+                    setPostMenuOpen(false);
+                    postToggleRef.current?.focus();
+                    onSendMessage(
+                      language === "ja"
+                        ? "現在のページについて投稿文を作成してください。"
+                        : "Draft a post about the current page.",
+                      [],
+                      {
+                        kind: "post",
+                        instructions: buildPostPresetPrompt(preset, language),
+                        useCommonInstructions: preset.useCommonInstructions,
+                        xPostLimit: presetXLimit(preset),
+                      },
+                    );
+                  }}
+                >
+                  {preset.name}
+                </button>
+              ))}
+            </div>
           </div>
         )}
         {pendingAttachments.length > 0 && (

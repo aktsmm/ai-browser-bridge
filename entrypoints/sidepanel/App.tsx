@@ -112,7 +112,13 @@ import {
   inspectButtonClick,
   undoLastDisplayEdit,
 } from "./browser-execution";
-import { readPageWithRecovery, type PageContextResult } from "./page-context";
+import {
+  pageLoadWaitMs,
+  readPageWithRecovery,
+  waitForTabComplete,
+  type PageContextResult,
+} from "./page-context";
+import { createCoalescingRunner } from "./auto-read";
 import { canEditDisplay } from "./display-edit-permission";
 
 const DEFAULT_SETTINGS: LLMSettings = {
@@ -248,6 +254,21 @@ export default function App() {
   const [pageOrigin, setPageOrigin] = useState("");
   const [isReadingPage, setIsReadingPage] = useState(false);
   const readingPageRef = useRef(false);
+  type RetryRequest = {
+    message: string;
+    attachments: ChatAttachment[];
+    task?: TaskOptions;
+    tabId: number | null;
+  };
+  const [retryRequest, setRetryRequest] = useState<RetryRequest | null>(null);
+  const retryRequestRef = useRef<RetryRequest | null>(null);
+  const [autoReading, setAutoReading] = useState(false);
+  const autoReadTaskRef = useRef<() => Promise<void>>(async () => undefined);
+  const autoReadRunner = useRef<ReturnType<typeof createCoalescingRunner>>();
+  if (!autoReadRunner.current)
+    autoReadRunner.current = createCoalescingRunner(() =>
+      autoReadTaskRef.current(),
+    );
   const [personalProfile, setPersonalProfile] = useState(() =>
     normalizePersonalProfile(null),
   );
@@ -1163,9 +1184,11 @@ export default function App() {
     mode?: "interactive" | "content";
     autoScrollForLazyLoad?: boolean;
     displayEditing?: boolean;
+    tabId?: number;
+    background?: boolean;
   }): Promise<string> => {
     try {
-      const targetTabId = activeContentTabIdRef.current;
+      const targetTabId = options?.tabId ?? activeContentTabIdRef.current;
       const tab =
         typeof targetTabId === "number"
           ? await chrome.tabs.get(targetTabId).catch(() => undefined)
@@ -1218,6 +1241,18 @@ export default function App() {
       const autoScrollForLazyLoad = options?.autoScrollForLazyLoad ?? false;
       const displayEditing =
         options?.displayEditing ?? activeDisplayEditRef.current;
+
+      // 読込中のタブは本文が空・遷移途中で失敗しやすいので、完了を待ってから読む。
+      // 裏の自動読み取りは短く切り上げ、完了しないページで送信を長く待たせない。
+      const tabId = tab.id;
+      const loadWait = pageLoadWaitMs(Boolean(options?.background));
+      const waitForTabReady = (timeoutMs: number) =>
+        waitForTabComplete(
+          async () =>
+            (await chrome.tabs.get(tabId).catch(() => undefined))?.status,
+          { timeoutMs, intervalMs: 250 },
+        );
+      if (tab.status === "loading") await waitForTabReady(loadWait.initialMs);
 
       const injection = {
         target: { tabId: tab.id, allFrames: true },
@@ -1629,17 +1664,25 @@ export default function App() {
           }
         },
         async () => {
+          await waitForTabReady(loadWait.retryMs);
           await chrome.scripting.executeScript({
             target: { tabId: tab.id! },
             func: () =>
               new Promise<void>((resolve) => {
-                const observer = new MutationObserver(() => finish());
-                const timer = setTimeout(() => finish(), 700);
+                // 変化が 400ms 止まったら描画が落ち着いたとみなす（上限 2.5 秒）
+                let quietTimer: ReturnType<typeof setTimeout>;
+                const observer = new MutationObserver(() => {
+                  clearTimeout(quietTimer);
+                  quietTimer = setTimeout(finish, 400);
+                });
+                const maxTimer = setTimeout(() => finish(), 2500);
                 const finish = () => {
-                  clearTimeout(timer);
+                  clearTimeout(quietTimer);
+                  clearTimeout(maxTimer);
                   observer.disconnect();
                   resolve();
                 };
+                quietTimer = setTimeout(finish, 400);
                 observer.observe(document.documentElement, {
                   subtree: true,
                   childList: true,
@@ -1671,7 +1714,7 @@ export default function App() {
         capturedAt: Date.now(),
       };
       setPageState(pageStateRef.current);
-      const targetTabId = activeContentTabIdRef.current;
+      const targetTabId = options?.tabId ?? activeContentTabIdRef.current;
       const tab =
         typeof targetTabId === "number"
           ? await chrome.tabs.get(targetTabId).catch(() => undefined)
@@ -1700,6 +1743,10 @@ export default function App() {
       return;
 
     inFlightRequestRef.current = true;
+    retryRequestRef.current = null;
+    setRetryRequest(null);
+    // 自動読み取りが実行中なら、ページ状態を上書きし合わないよう完了を待つ
+    await autoReadRunner.current?.idle();
     let editingForRun = false;
     let displayTaskId = "";
     const displayLookupSupported =
@@ -1877,6 +1924,13 @@ export default function App() {
         isPageContentUnavailableContext(pageContent) &&
         !screenshotBase64
       ) {
+        retryRequestRef.current = {
+          message: userMessage,
+          attachments,
+          task,
+          tabId: targetTab?.id ?? null,
+        };
+        setRetryRequest(retryRequestRef.current);
         setMessages((prev: ChatMessage[]) => [
           ...prev,
           {
@@ -2837,6 +2891,7 @@ export default function App() {
   };
   const refreshPageContext = async () => {
     if (inFlightRequestRef.current || readingPageRef.current) return;
+    await autoReadRunner.current?.idle();
     readingPageRef.current = true;
     setIsReadingPage(true);
     try {
@@ -2867,6 +2922,78 @@ export default function App() {
       setIsReadingPage(false);
     }
   };
+
+  // 表示中のタブを自動で読み取り、ページ状態を最新にする（AI への送信は行わない）。
+  // 本文のみの軽い読み取りで、DOM への ref 付与はしない。
+  autoReadTaskRef.current = async () => {
+    if (
+      inFlightRequestRef.current ||
+      readingPageRef.current ||
+      !settingsLoadedRef.current
+    )
+      return;
+    setAutoReading(true);
+    try {
+      if (!(await privacyReadyRef.current)) return;
+      const tab = (
+        await chrome.tabs.query({ active: true, currentWindow: true })
+      )[0];
+      if (tab?.id === undefined) return;
+      if (
+        privateTabsRef.current.has(tab.id) ||
+        (await isPrivateBrowserTab(tab.id))
+      ) {
+        pageStateRef.current = null;
+        setPageState(null);
+        setPageOrigin("");
+        return;
+      }
+      await extractPageContent({
+        mode: "content",
+        tabId: tab.id,
+        background: true,
+      });
+    } catch (error) {
+      console.warn("Auto page read failed:", error);
+    } finally {
+      setAutoReading(false);
+    }
+  };
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const schedule = (delay = 400) => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        // 初期設定の読込前に起動した場合は、読込完了まで待つ
+        if (!settingsLoadedRef.current) schedule(300);
+        else autoReadRunner.current?.request();
+      }, delay);
+    };
+    const onActivated = () => schedule();
+    const onUpdated = (
+      _tabId: number,
+      changeInfo: { status?: string; url?: string },
+      tab: chrome.tabs.Tab,
+    ) => {
+      if (tab.active && (changeInfo.status === "complete" || changeInfo.url))
+        schedule(changeInfo.status === "complete" ? 400 : 1200);
+    };
+    const onFocus = (windowId: number) => {
+      // Chrome 外へフォーカスが移ったときは読み直さない
+      if (windowId !== chrome.windows.WINDOW_ID_NONE) schedule();
+    };
+    chrome.tabs.onActivated.addListener(onActivated);
+    chrome.tabs.onUpdated.addListener(onUpdated);
+    chrome.windows.onFocusChanged.addListener(onFocus);
+    schedule(800);
+    return () => {
+      clearTimeout(timer);
+      chrome.tabs.onActivated.removeListener(onActivated);
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      chrome.windows.onFocusChanged.removeListener(onFocus);
+    };
+  }, []);
 
   return (
     <div className="flex flex-col h-full min-w-0 bg-gray-50">
@@ -3370,9 +3497,47 @@ export default function App() {
           origin={pageOrigin}
           language={language}
           busy={isLoading || isReadingPage}
-          reading={isReadingPage}
+          reading={isReadingPage || autoReading}
           onRead={() => void refreshPageContext()}
         />
+        {retryRequest && !isLoading && (
+          <div
+            role="status"
+            className="px-3 py-1 text-xs bg-amber-50 text-amber-900 border-t border-amber-200 flex items-center gap-2"
+          >
+            <span className="flex-1 min-w-0">
+              {language === "ja"
+                ? "ページを読み取れなかったため、依頼を保留しています。"
+                : "The request is on hold because the page could not be read."}
+            </span>
+            <button
+              type="button"
+              className="underline shrink-0"
+              onClick={() => {
+                const request = retryRequestRef.current;
+                if (!request) return;
+                activeContentTabIdRef.current = request.tabId;
+                void sendMessage(
+                  request.message,
+                  request.attachments,
+                  request.task,
+                );
+              }}
+            >
+              {language === "ja" ? "再読み込みして続行" : "Reload and continue"}
+            </button>
+            <button
+              type="button"
+              className="underline shrink-0"
+              onClick={() => {
+                retryRequestRef.current = null;
+                setRetryRequest(null);
+              }}
+            >
+              {language === "ja" ? "閉じる" : "Dismiss"}
+            </button>
+          </div>
+        )}
         <Chat
           isSavingAnswer={isSavingAnswer}
           disabledReason={
