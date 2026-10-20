@@ -179,6 +179,11 @@ npm run validate:bridge
 
 # Create ZIP (for Chrome Web Store)
 npm run zip
+
+# Chrome Web Store (API v2 with a service account; maintainers only)
+npm run cws:status         # published and pending versions
+npm run cws:publish        # dry-run: ZIP checks and plan, no changes
+npm run cws:publish:apply  # upload the ZIP and submit it for review
 ```
 
 ## License

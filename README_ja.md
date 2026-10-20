@@ -177,6 +177,11 @@ npm run validate:bridge
 
 # ZIP作成（Chrome Web Store用）
 npm run zip
+
+# Chrome Web Store（サービスアカウントによる API v2。メンテナー向け）
+npm run cws:status         # 公開中・審査中のバージョン
+npm run cws:publish        # ドライラン: ZIP検査と実行計画のみ（変更なし）
+npm run cws:publish:apply  # ZIPをアップロードして審査へ提出
 ```
 
 ## 📄 ライセンス

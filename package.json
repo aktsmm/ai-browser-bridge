@@ -16,6 +16,9 @@
     "zip": "wxt zip",
     "zip:firefox": "wxt zip -b firefox",
     "validate:bridge": "node ./scripts/validate-bridge-consistency.mjs",
+    "cws:status": "node ./scripts/cws-publish.mjs --status",
+    "cws:publish": "node ./scripts/cws-publish.mjs",
+    "cws:publish:apply": "node ./scripts/cws-publish.mjs --apply",
     "cws:setup": "pwsh -ExecutionPolicy Bypass -File ./scripts/setup-cws-credentials.ps1 -OpenBrowser",
     "postinstall": "wxt prepare"
   },
