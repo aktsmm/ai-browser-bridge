@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
   combinePageFrames,
@@ -5,6 +6,23 @@ import {
   readPageWithRecovery,
   waitForTabComplete,
 } from "./page-context";
+
+describe("content root selection guard", () => {
+  // 注入関数は import を使えず実DOMが要るため、回帰（先頭の article だけを読む）を静的に守る
+  const source = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
+
+  it("never reads only the first article/main match", () => {
+    expect(source).not.toMatch(
+      /document\s*\.querySelector\(\s*"article, main, \[role='main'\]"/,
+    );
+  });
+
+  it("picks the root by visible text and falls back to body when empty", () => {
+    expect(source).toContain("pickContentRoot");
+    expect(source).toMatch(/innerText/);
+    expect(source).toMatch(/activeRoot = document\.body/);
+  });
+});
 
 const frame = {
   frameId: 3,

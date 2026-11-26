@@ -1312,6 +1312,28 @@ export default function App() {
             return false;
           };
 
+          // 先頭の article/main が中身のない枠のサイトがあるため、表示中でテキスト量が最大の候補を本文とする
+          const pickContentRoot = (): Element => {
+            let best: Element | null = null;
+            let bestLength = 0;
+            document
+              .querySelectorAll("article, main, [role='main']")
+              .forEach((candidate) => {
+                if (!(candidate as HTMLElement).getClientRects().length) return;
+                const length = (
+                  (candidate as HTMLElement).innerText ?? ""
+                ).trim().length;
+                if (length > bestLength) {
+                  best = candidate;
+                  bestLength = length;
+                }
+              });
+            return best ?? document.body;
+          };
+          const contentRoot =
+            opts.mode === "content" ? pickContentRoot() : null;
+          let activeRoot: Element | null = contentRoot;
+
           const collectText = (
             onlyViewport: boolean,
             maxChars: number,
@@ -1320,12 +1342,7 @@ export default function App() {
             let total = 0;
             for (const root of roots) {
               const walker = document.createTreeWalker(
-                root === document
-                  ? opts.mode === "content"
-                    ? document.querySelector("article, main, [role='main']") ||
-                      document.body
-                    : document.body
-                  : root,
+                root === document ? (activeRoot ?? document.body) : root,
                 NodeFilter.SHOW_TEXT,
                 {
                   acceptNode: (node) => {
@@ -1390,9 +1407,18 @@ export default function App() {
           const scrollInfo = `ScrollY: ${Math.round(window.scrollY)} / ${Math.round(document.documentElement.scrollHeight)} (vh=${Math.round(window.innerHeight)})`;
 
           // Put viewport text first so the VS Code side (which may slice) keeps the most relevant content.
-          const viewportText = collectText(true, MAX_VIEWPORT_CHARS);
-          const fullText =
+          let viewportText = collectText(true, MAX_VIEWPORT_CHARS);
+          let fullText =
             opts.mode === "content" ? collectText(false, MAX_FULL_CHARS) : "";
+          if (
+            opts.mode === "content" &&
+            !(fullText || viewportText).trim() &&
+            activeRoot !== document.body
+          ) {
+            activeRoot = document.body;
+            viewportText = collectText(true, MAX_VIEWPORT_CHARS);
+            fullText = collectText(false, MAX_FULL_CHARS);
+          }
 
           const selectedText =
             opts.mode === "content" ? fullText || viewportText : viewportText;
